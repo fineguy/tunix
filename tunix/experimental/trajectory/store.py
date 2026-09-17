@@ -4,6 +4,11 @@ import abc
 from typing import Any, ClassVar, Mapping, Protocol, runtime_checkable
 
 from tunix.experimental.trajectory import trajectory as trajectory_lib
+# A: from ... import MetadataT, TrajectoryT #pylint: disable=g-importing-member
+# B: trajectory.MetadataT, trajectory.TrajectoryT
+# C: MetadataT = trajectory.MetadataT, TrajectoryT = trajectory.TrajectoryT
+from tunix.experimental.trajectory.trajectory import MetadataT  # pylint: disable=g-importing-member
+from tunix.experimental.trajectory.trajectory import TrajectoryT  # pylint: disable=g-importing-member
 
 # ==============================================================================
 # Custom Exceptions
@@ -32,12 +37,12 @@ class TrajectoryMetadataNotFoundError(KeyError):
 
 
 @runtime_checkable
-class TrajectoryReader(Protocol):
+class TrajectoryReader(Protocol[MetadataT, TrajectoryT]):
   """Structural protocol defining read-only Trajectory Store operations."""
 
   def get_trajectories_metadata(
       self, trajectory_ids: list[str] | None = None
-  ) -> list[trajectory_lib.TrajectoryMetadata]:
+  ) -> list[MetadataT]:
     """Retrieves metadata for trajectories in the run.
 
     Args:
@@ -54,9 +59,7 @@ class TrajectoryReader(Protocol):
     """
     ...
 
-  def get_trajectories(
-      self, trajectory_ids: list[str]
-  ) -> list[trajectory_lib.Trajectory]:
+  def get_trajectories(self, trajectory_ids: list[str]) -> list[TrajectoryT]:
     """Retrieves full trajectories for a list of trajectory IDs.
 
     Args:
@@ -72,13 +75,13 @@ class TrajectoryReader(Protocol):
 
 
 @runtime_checkable
-class TrajectoryWriter(Protocol):
+class TrajectoryWriter(Protocol[MetadataT]):
   """Structural protocol defining write Trajectory Store operations."""
 
   def add_step(
       self,
       step: trajectory_lib.Step,
-      metadata: trajectory_lib.TrajectoryMetadata,
+      metadata: MetadataT,
   ) -> None:
     """Logs a turn step and its trajectory metadata.
 
@@ -97,7 +100,7 @@ class TrajectoryWriter(Protocol):
 
   def update_metadata(
       self,
-      metadata: trajectory_lib.TrajectoryMetadata,
+      metadata: MetadataT,
   ) -> None:
     """Updates (or creates) trajectory metadata.
 
@@ -133,7 +136,11 @@ class TrajectoryWriter(Protocol):
 # ==============================================================================
 
 
-class TrajectoryStore(TrajectoryReader, TrajectoryWriter, abc.ABC):
+class TrajectoryStore(
+    TrajectoryReader[MetadataT, TrajectoryT],
+    TrajectoryWriter[MetadataT],
+    abc.ABC,
+):
   """Base class pairing a store implementation with its own configuration.
 
   Every backend owns both directions of its configuration: `_from_config`
@@ -151,7 +158,7 @@ class TrajectoryStore(TrajectoryReader, TrajectoryWriter, abc.ABC):
 
   # The value of the config's "backend" key that selects this class.
   BACKEND: ClassVar[str]
-  _REGISTRY: ClassVar[dict[str, type["TrajectoryStore"]]] = {}
+  _REGISTRY: ClassVar[dict[str, type["TrajectoryStore[Any, Any]"]]] = {}
 
   def __init_subclass__(cls, **kwargs: Any) -> None:
     super().__init_subclass__(**kwargs)
@@ -161,7 +168,9 @@ class TrajectoryStore(TrajectoryReader, TrajectoryWriter, abc.ABC):
 
   @classmethod
   @abc.abstractmethod
-  def _from_config(cls, config: Mapping[str, Any]) -> "TrajectoryStore":
+  def _from_config(
+      cls, config: Mapping[str, Any]
+  ) -> "TrajectoryStore[Any, Any]":
     """Builds an instance of this backend from `config`.
 
     Implementations read the keys they care about and raise ValueError for a
@@ -192,7 +201,7 @@ class TrajectoryStore(TrajectoryReader, TrajectoryWriter, abc.ABC):
   @classmethod
   def from_config(
       cls, config: Mapping[str, Any] | None
-  ) -> "TrajectoryStore | None":
+  ) -> "TrajectoryStore[Any, Any] | None":
     """Builds the store described by `config`, or None when it is disabled.
 
     Call once per process and hold onto the result: the process that built a

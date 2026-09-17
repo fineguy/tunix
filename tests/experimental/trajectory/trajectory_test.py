@@ -367,6 +367,124 @@ class TrajectoryTest(trajectory_testing.TrajectoryTestCase):
     self.assertFalse(hasattr(meta, "steps"))
     self.assertFalse(hasattr(meta, "subagent_trajectories"))
 
+  def test_create_trajectory_with_steps_and_subagent_trajectories(self):
+    meta = trajectory.TrajectoryMetadata(
+        trajectory_id="traj_parent",
+        session_id="session_1",
+        agent=trajectory.Agent(name="agent_test", version="1.0"),
+        notes="parent notes",
+        extra={"custom": "field"},
+    )
+    steps = [
+        trajectory.Step(
+            step_id=1, source=trajectory.Source.USER, message="Start"
+        ),
+        trajectory.Step(
+            step_id=2, source=trajectory.Source.AGENT, message="Respond"
+        ),
+    ]
+    subagents = [
+        trajectory.Trajectory(
+            trajectory_id="sub_1",
+            agent=trajectory.Agent(name="sub_agent", version="1.0"),
+            steps=[
+                trajectory.Step(
+                    step_id=1, source=trajectory.Source.AGENT, message="Sub"
+                )
+            ],
+        )
+    ]
+
+    traj = meta.create_trajectory(steps=steps, subagent_trajectories=subagents)
+
+    self.assertIsInstance(traj, trajectory.Trajectory)
+    self.assertEqual(traj.trajectory_id, "traj_parent")
+    self.assertEqual(traj.session_id, "session_1")
+    self.assertEqual(traj.notes, "parent notes")
+    self.assertEqual(traj.extra, {"custom": "field"})
+    self.assertLen(traj.steps, 2)
+    self.assertLen(traj.subagent_trajectories, 1)
+    self.assertEqual(traj.subagent_trajectories[0].trajectory_id, "sub_1")
+    self.assertTrajectoryEqual(traj.subagent_trajectories[0], subagents[0])
+    # The input sequences are copied, not aliased.
+    self.assertIsNot(traj.steps, steps)
+    self.assertIsNot(traj.subagent_trajectories, subagents)
+
+  def test_create_trajectory_without_steps_or_subagent_trajectories(self):
+    meta = trajectory.TrajectoryMetadata(
+        trajectory_id="traj_empty",
+        agent=trajectory.Agent(name="agent_test", version="1.0"),
+    )
+
+    traj = meta.create_trajectory()
+
+    self.assertIsInstance(traj, trajectory.Trajectory)
+    self.assertEqual(traj.trajectory_id, "traj_empty")
+    self.assertEmpty(traj.steps)
+    self.assertIsNone(traj.subagent_trajectories)
+
+  def test_create_trajectory_rejects_subagent_without_trajectory_id(self):
+    meta = trajectory.TrajectoryMetadata(
+        trajectory_id="traj_parent",
+        agent=trajectory.Agent(name="agent_test", version="1.0"),
+    )
+    subagents = [
+        trajectory.Trajectory(
+            agent=trajectory.Agent(name="sub_agent", version="1.0"),
+        )
+    ]
+
+    with self.assertRaises(ValueError):
+      meta.create_trajectory(subagent_trajectories=subagents)
+
+  def test_tunix_create_trajectory_with_subagent_trajectories(self):
+    meta = trajectory.TunixTrajectoryMetadata(
+        trajectory_id="tunix_parent",
+        agent=trajectory.Agent(name="agent_test", version="1.0"),
+        prompt_id="prompt_abc",
+        group_index=3,
+        status="COMPLETED",
+        total_reward=1.5,
+        hyperparams={"temperature": 0.7},
+    )
+    steps = [
+        trajectory.TunixAgentStep(
+            step_id=0, source=trajectory.Source.AGENT, message="Act"
+        )
+    ]
+    subagents = [
+        trajectory.TunixTrajectory(
+            trajectory_id="tunix_sub_1",
+            agent=trajectory.Agent(name="sub_agent", version="1.0"),
+        )
+    ]
+
+    traj = meta.create_trajectory(steps=steps, subagent_trajectories=subagents)
+
+    self.assertIsInstance(traj, trajectory.TunixTrajectory)
+    self.assertEqual(traj.trajectory_id, "tunix_parent")
+    self.assertEqual(traj.prompt_id, "prompt_abc")
+    self.assertEqual(traj.group_index, 3)
+    self.assertEqual(traj.status, "COMPLETED")
+    self.assertEqual(traj.total_reward, 1.5)
+    self.assertEqual(traj.hyperparams, {"temperature": 0.7})
+    self.assertLen(traj.steps, 1)
+    self.assertLen(traj.subagent_trajectories, 1)
+    self.assertEqual(traj.subagent_trajectories[0].trajectory_id, "tunix_sub_1")
+    self.assertIsNot(traj.subagent_trajectories, subagents)
+
+  def test_tunix_create_trajectory_without_subagent_trajectories(self):
+    meta = trajectory.TunixTrajectoryMetadata(
+        trajectory_id="tunix_empty",
+        agent=trajectory.Agent(name="agent_test", version="1.0"),
+    )
+
+    traj = meta.create_trajectory()
+
+    self.assertIsInstance(traj, trajectory.TunixTrajectory)
+    self.assertEmpty(traj.steps)
+    self.assertIsNone(traj.subagent_trajectories)
+
   def test_step_initialization_with_rl_fields(self):
     step = trajectory.TunixAgentStep(
         step_id=1,
