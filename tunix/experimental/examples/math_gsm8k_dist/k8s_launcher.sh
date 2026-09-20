@@ -107,6 +107,9 @@ export WANDB_RUN_NAME=${WANDB_RUN_NAME:-}
 export WANDB_API_KEY=${WANDB_API_KEY:-}
 export LOG_DIR=${LOG_DIR:-}
 export TRAJECTORY_LOG_DIR=${TRAJECTORY_LOG_DIR:-}
+export RCP_LOGGING=${RCP_LOGGING:-false}
+export METRIC_LOGGER_DIR=${METRIC_LOGGER_DIR:-}
+export TARGET_ACCURACY=${TARGET_ACCURACY:-0.69}
 export TFDS_DATA_DIR=${TFDS_DATA_DIR:-"artifacts/data"}
 export TFDS_SPLIT=${TFDS_SPLIT:-train}
 export FLUSH_METRICS_EVERY_N_STEPS=${FLUSH_METRICS_EVERY_N_STEPS:-1}
@@ -180,6 +183,10 @@ start_orchestrator() {
   if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || "${DEBUG}" == "True" ]]; then
     debug_flag="--debug"
   fi
+  local rcp_flag=""
+  if [[ "${RCP_LOGGING}" == "1" || "${RCP_LOGGING}" == "true" || "${RCP_LOGGING}" == "True" ]]; then
+    rcp_flag="--rcp_logging"
+  fi
 
   "$PYTHON" "$YAML_GEN" \
     "$YAML_DIR/jobset.cpu.yaml" \
@@ -221,6 +228,20 @@ start_orchestrator() {
         ${MAX_SEQ_TOKEN_PER_TPU:+--max_seq_token_per_tpu=${MAX_SEQ_TOKEN_PER_TPU}} \
         ${MAX_SEGMENTS_PER_PACKED_ROW:+--max_segments_per_packed_row=${MAX_SEGMENTS_PER_PACKED_ROW}} \
         ${TRAINER_MESH_FSDP:+--trainer_fsdp=${TRAINER_MESH_FSDP}} \
+        --eval_every_n_steps=${EVAL_EVERY_N_STEPS} \
+        --learning_rate=${LEARNING_RATE} \
+        --b1=${ADAM_B1} \
+        --b2=${ADAM_B2} \
+        --weight_decay=${WEIGHT_DECAY} \
+        --max_grad_norm=${MAX_GRAD_NORM} \
+        --train_mesh_tp=${TRAINER_MESH_TP} \
+        --train_mesh_expert=${TRAINER_MESH_EXPERT} \
+        --rollout_mesh_tp=${ROLLOUT_MESH_TP} \
+        --rollout_engine=${SAMPLER} \
+        --tpu_topology="${TRAINER_TPU_SLICE}+${ROLLOUT_TPU_SLICE}" \
+        --target_accuracy=${TARGET_ACCURACY} \
+        ${METRIC_LOGGER_DIR:+--metric_logger_dir="${METRIC_LOGGER_DIR}"} \
+        ${rcp_flag} \
         ${debug_flag} \
     " \
     | apply_manifest

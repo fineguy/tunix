@@ -57,6 +57,7 @@ from tunix.experimental.weight_sync import weight_sync  # pylint: disable=g-impo
 from tunix.experimental.worker import remote_execution  # pylint: disable=g-import-not-at-top
 from tunix.rl import algorithm_config  # pylint: disable=g-import-not-at-top
 from tunix.sft import metrics_logger as metrics_logger_lib  # pylint: disable=g-import-not-at-top
+from tunix.utils import mllog_utils  # pylint: disable=g-import-not-at-top
 
 ProcessContext = runtime_context.ProcessContext
 
@@ -288,6 +289,79 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
       action="store_true",
       help="Enable debug logging and print full sampler responses.",
   )
+  parser.add_argument(
+      "--rcp_logging",
+      action="store_true",
+      default=False,
+      help="Enable MLPerf RCP (mllog) compliance logging.",
+  )
+  parser.add_argument(
+      "--metric_logger_dir",
+      type=str,
+      default=os.getenv("METRIC_LOGGER_DIR", None),
+      help="Directory or GCS URI for MLPerf RCP output (seed_<seed>.out).",
+  )
+  parser.add_argument(
+      "--target_accuracy",
+      type=float,
+      default=float(os.getenv("TARGET_ACCURACY", "0.69")),
+      help="Target evaluation accuracy for MLPerf RCP compliance logging.",
+  )
+  parser.add_argument(
+      "--eval_every_n_steps",
+      type=int,
+      default=int(os.getenv("EVAL_EVERY_N_STEPS", "1000000")),
+  )
+  parser.add_argument(
+      "--learning_rate",
+      type=float,
+      default=float(os.getenv("LEARNING_RATE", "2.0e-7")),
+  )
+  parser.add_argument(
+      "--b1",
+      type=float,
+      default=float(os.getenv("ADAM_B1", "0.9")),
+  )
+  parser.add_argument(
+      "--b2",
+      type=float,
+      default=float(os.getenv("ADAM_B2", "0.999")),
+  )
+  parser.add_argument(
+      "--weight_decay",
+      type=float,
+      default=float(os.getenv("WEIGHT_DECAY", "0.01")),
+  )
+  parser.add_argument(
+      "--max_grad_norm",
+      type=float,
+      default=float(os.getenv("MAX_GRAD_NORM", "1.0")),
+  )
+  parser.add_argument(
+      "--train_mesh_tp",
+      type=int,
+      default=int(os.getenv("TRAINER_MESH_TP", "1")),
+  )
+  parser.add_argument(
+      "--train_mesh_expert",
+      type=int,
+      default=int(os.getenv("TRAINER_MESH_EXPERT", "1")),
+  )
+  parser.add_argument(
+      "--rollout_mesh_tp",
+      type=int,
+      default=int(os.getenv("ROLLOUT_MESH_TP", "1")),
+  )
+  parser.add_argument(
+      "--rollout_engine",
+      type=str,
+      default=os.getenv("SAMPLER", "vllm"),
+  )
+  parser.add_argument(
+      "--tpu_topology",
+      type=str,
+      default=os.getenv("TPU_TOPOLOGY", None),
+  )
   return parser.parse_args(argv)
 
 
@@ -389,6 +463,8 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
   )
 
   args = _parse_args(argv)
+  if args.rcp_logging:
+    mllog_utils.init_start(args)
   if args.debug:
     # Enable canonical debug logging and print full sampler responses
     logging.getLogger().setLevel(logging.DEBUG)
@@ -520,16 +596,39 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
           step,
           step,
       ),
-      on_step_end=lambda step, result: logging.info(
-          "<<< Step %d finished | Advanced to Policy Version: %d",
-          step,
-          step + 1,
+      on_step_end=lambda step, result: (
+          logging.info(
+              "<<< Step %d finished | Advanced to Policy Version: %d",
+              step,
+              step + 1,
+          ),
+          mllog_utils.log_rcp_step_stats(
+              program.metrics_logger,
+              args=args,
+              step=step + 1,
+          )
+          if args.rcp_logging
+          else None,
       ),
   )
+
+  if args.rcp_logging:
+    train_ds = gsm8k.load_gsm8k_dataset(
+        split=args.tfds_split,
+        data_dir=args.tfds_data_dir,
+        shuffle=args.shuffle,
+        seed=args.seed,
+    )
+    mllog_utils.init_print(
+        args,
+        train_dataset=train_ds,
+    )
 
   try:
     logging.info("Bringing up remote workers through ClusterOrchestrator...")
     cluster.bring_up_workers(dummy_data=None)
+    if args.rcp_logging:
+      mllog_utils.train_start(args, step=0)
     logging.info(
         "Cluster workers ready: %s. Starting StandardRLProgram execution...",
         [w.worker_id for w in cluster.worker_infos()],
@@ -539,7 +638,21 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
         num_steps=args.max_steps,
         bring_up=False,
     )
+    if args.rcp_logging:
+      completed_steps = (
+          program.last_step_result.step + 1
+          if program.last_step_result is not None
+          else args.max_steps
+      )
+      mllog_utils.train_stop(args, step=completed_steps, status="success")
   except BaseException as exc:
+    if args.rcp_logging:
+      completed_steps = (
+          program.last_step_result.step + 1
+          if program.last_step_result is not None
+          else 0
+      )
+      mllog_utils.train_stop(args, step=completed_steps, status="aborted")
     logging.exception("FATAL: StandardRLProgram execution failed: %s", exc)
     raise
   finally:
