@@ -66,10 +66,16 @@ def _flush_to_gcs_if_needed() -> None:
     for h in getattr(mllogger.logger, "handlers", []):
       if isinstance(h, logging.FileHandler):
         h.flush()
-    import tensorflow as tf  # pylint: disable=g-import-not-at-top
+    try:
+      import fsspec  # pylint: disable=g-import-not-at-top
 
-    tf.io.gfile.makedirs(os.path.dirname(_gcs_target_path))
-    tf.io.gfile.copy(_local_log_path, _gcs_target_path, overwrite=True)
+      fs = fsspec.filesystem("gs")
+      fs.put(_local_log_path, _gcs_target_path)
+    except Exception:  # pylint: disable=broad-exception-caught
+      import tensorflow as tf  # pylint: disable=g-import-not-at-top
+
+      tf.io.gfile.makedirs(os.path.dirname(_gcs_target_path))
+      tf.io.gfile.copy(_local_log_path, _gcs_target_path, overwrite=True)
   except Exception as exc:  # pylint: disable=broad-exception-caught
     logging.warning(
         "Failed to copy mllog file %s to %s: %s",
@@ -216,6 +222,7 @@ def train_start(args=None, step: int = 0, samples_count: Optional[int] = None):
   init_stop()
   run_start()
   block_start(args=args, step=step, samples_count=samples_count)
+  _flush_to_gcs_if_needed()
 
 
 def block_stop(step: int = 0, samples_count: Optional[int] = None):
@@ -648,6 +655,7 @@ def log_rcp_step_stats(
       "valid_tokens_per_sec_per_gpu": toks_per_sec_per_gpu,
   }
   log_tracked_stats(timing_tracked, step=step_num, samples_count=samples_count)
+  _flush_to_gcs_if_needed()
 
 
 MLPERF_TRACKED_KEYS = frozenset({
@@ -845,14 +853,14 @@ def init_print(
     )
 
   # Extract batch & step configs
-  batch_size = getattr(args, "batch_size", 8)
-  num_generations = getattr(args, "num_generations", 8)
+  batch_size = getattr(args, "batch_size", None) or 8
+  num_generations = getattr(args, "num_generations", None) or 8
   global_batch_size = batch_size * num_generations
-  mini_batch_size = getattr(args, "mini_batch_size", batch_size)
-  train_micro_batch_size = getattr(args, "train_micro_batch_size", 1)
-  max_steps = getattr(args, "max_steps", 50)
-  max_prompt_length = getattr(args, "max_prompt_length", 4096)
-  max_response_length = getattr(args, "max_response_length", 8192)
+  mini_batch_size = getattr(args, "mini_batch_size", None) or batch_size
+  train_micro_batch_size = getattr(args, "train_micro_batch_size", None) or 1
+  max_steps = getattr(args, "max_steps", None) or 50
+  max_prompt_length = getattr(args, "max_prompt_length", None) or 4096
+  max_response_length = getattr(args, "max_response_length", None) or 8192
   max_seq_len = max_prompt_length + max_response_length
 
   # Train / Eval sample counts
@@ -984,3 +992,4 @@ def init_print(
   for key, value in logging_configs.items():
     if value is not None:
       mllogger.event(key=key, value=value)
+  _flush_to_gcs_if_needed()

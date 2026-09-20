@@ -229,8 +229,17 @@ class _RaidenTransport:
             if metadata.variables
             else None
         ),
-        host_subgrid=(
-            list(metadata.host_subgrid) if metadata.host_subgrid else None
+        **(
+            {
+                "host_subgrid": (
+                    list(metadata.host_subgrid)
+                    if metadata.host_subgrid
+                    else None
+                )
+            }
+            if "host_subgrid"
+            in __import__("inspect").signature(self._controller.register_work_unit).parameters
+            else {}
         ),
     )
     with self._registered_lock:
