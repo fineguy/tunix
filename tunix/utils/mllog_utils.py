@@ -430,10 +430,20 @@ def _extract_kv_from_metrics_buffer(metrics_buffer: Any) -> dict[str, Any]:
             hasattr(x, "compute") or hasattr(x, "numerator") for x in values
         ]
         if any(is_weighted):
-          if op is not None and getattr(op, "__name__", "") in (
-              "_weighted_metric_mean",
-              "global_weighted_mean",
-              "mean_of_means",
+          # Mirrors `tunix.sft.utils.consumes_unreduced_metrics`, inlined to
+          # keep this module free of tunix imports: ask the reducer whether it
+          # takes unreduced values rather than matching its name, since a
+          # renamed reducer would silently fall through to the `compute()`
+          # branch below and turn a global weighted mean into a mean of means.
+          if op is not None and (
+              getattr(op, "consumes_weighted_metrics", False)
+              or getattr(op, "__name__", "")
+              in (
+                  "_weighted_metric_mean",
+                  "weighted_metric_mean",
+                  "global_weighted_mean",
+                  "mean_of_means",
+              )
           ):
             try:
               values = op(values)

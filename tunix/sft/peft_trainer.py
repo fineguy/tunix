@@ -69,41 +69,6 @@ class TrainingInput:
   images: jax.Array | np.ndarray | None = None
 
 
-def _weighted_metric_mean(values: Iterable[Any]) -> float:
-  """Aggregates unreduced metrics without microbatch-mean bias."""
-  values = list(values)
-  if not values:
-    return 0.0
-  if not all(isinstance(value, utils.WeightedMetric) for value in values):
-    raise TypeError("weighted metrics must not include scalar values")
-
-  eps = values[0].eps
-  min_denom = values[0].min_denom
-  if any(
-      value.eps != eps or value.min_denom != min_denom for value in values[1:]
-  ):
-    raise ValueError("weighted metrics must use consistent denominator bounds")
-
-  numerator = sum(float(np.asarray(value.unreduced_sum)) for value in values)
-  denominator = sum(float(np.asarray(value.denominator)) for value in values)
-  if eps is not None:
-    denominator += eps
-  if min_denom is not None:
-    denominator = max(denominator, min_denom)
-  return numerator / denominator if denominator else 0.0
-
-
-def _metric_reducer(
-    metric: _MetricValue,
-) -> _MetricReducer:
-  """Selects the reduction that matches a buffered auxiliary metric."""
-  return (
-      _weighted_metric_mean
-      if isinstance(metric, utils.WeightedMetric)
-      else np.mean
-  )
-
-
 @dataclasses.dataclass(slots=True, kw_only=True)
 class MetricsBuffer:
   """Metrics collected for a specific step.
@@ -132,7 +97,7 @@ class MetricsBuffer:
     if any(weighted):
       if not all(weighted):
         raise TypeError("loss values must not mix weighted and scalar metrics")
-      return _weighted_metric_mean(self.losses)
+      return utils.weighted_metric_mean(self.losses)
     return np.mean(np.array([np.array(x) for x in self.losses]))
 
 
@@ -367,7 +332,7 @@ class PeftTrainer:
     self._lora_enabled = utils.is_lora_enabled(self.model)
     wrt_target = nnx.LoRAParam if self._lora_enabled else nnx.Param
     self.optimizer = nnx.Optimizer(self.model, optimizer, wrt=wrt_target)
-     # Adam moments follow the param dtype by default (optax inits them as
+    # Adam moments follow the param dtype by default (optax inits them as
     # zeros_like(params)).
     # Depth-1 non-packing fast path never reads the accumulator; skip its
     # model-sized grad-tree allocation there.
@@ -839,11 +804,11 @@ class PeftTrainer:
         if any(weighted) and not all(weighted):
           raise TypeError("metrics must not mix weighted and scalar values")
         if all(weighted):
-          if getattr(op, "__name__", "") in (
-              "_weighted_metric_mean",
-              "global_weighted_mean",
-              "mean_of_means",
-          ):
+          # Ask the reducer whether it can take unreduced values; pre-reducing
+          # one that can would turn a global weighted mean into a mean of
+          # per-microbatch means. The name list is the legacy form of the same
+          # question, kept for reducers that predate the marker.
+          if utils.consumes_unreduced_metrics(op):
             return op(v)
           v = [x.compute() for x in v]
       return op(_to_np_array(v))
@@ -1059,7 +1024,7 @@ class PeftTrainer:
         post_process_aux = aux
         if isinstance(aux, utils.LossOutput):
           additional_metrics.update({
-              name: (metric, _metric_reducer(metric))
+              name: (metric, utils.metric_reducer(metric))
               for name, metric in aux.aux_metrics.items()
           })
           post_process_aux = aux.aux_metrics
@@ -1181,7 +1146,7 @@ class PeftTrainer:
         if isinstance(aux, utils.LossOutput):
           uses_weighted_loss = True
           additional_metrics = {
-              name: (metric, _metric_reducer(metric))
+              name: (metric, utils.metric_reducer(metric))
               for name, metric in aux.aux_metrics.items()
           }
           post_process_aux = aux.aux_metrics
