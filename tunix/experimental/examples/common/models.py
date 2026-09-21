@@ -25,6 +25,8 @@ from jax.sharding import Mesh
 from jax.typing import DTypeLike  # pylint: disable=g-importing-member
 from tunix.models.gemma import model as gemma_model_lib
 from tunix.models.gemma import params_safetensors as gemma_params_lib
+from tunix.models.gemma4 import model as gemma4_model_lib
+from tunix.models.gemma4 import params_safetensors as gemma4_params_lib
 from tunix.models.qwen3 import model as qwen3_model_lib
 from tunix.models.qwen3 import params as qwen3_params_lib
 
@@ -36,6 +38,33 @@ def _gemma_config(model_name: str) -> gemma_model_lib.ModelConfig:
   if "gemma-2b" in normalized:
     return gemma_model_lib.ModelConfig.gemma_2b()
   raise ValueError(f"Unsupported gemma model_name: {model_name!r}")
+
+
+def is_gemma4_model(model_name: str) -> bool:
+  normalized = model_name.lower().replace("_", "-")
+  return "gemma-4" in normalized or "gemma4" in normalized
+
+
+def _gemma4_config(
+    model_name: str,
+    *,
+    remat_config: str = "none",
+    use_flash_attention: bool = False,
+    flash_attention_block_size: int | None = None,
+) -> gemma4_model_lib.ModelConfig:
+  """Builds the Gemma4 E2B config used by the FrozenLake recipe."""
+  normalized = model_name.lower().replace("_", "-")
+  if not is_gemma4_model(normalized) or "e2b" not in normalized:
+    raise ValueError(f"Unsupported gemma4 model_name: {model_name!r}")
+
+  config = gemma4_model_lib.ModelConfig.gemma4_e2b()
+  config.remat_config = gemma4_model_lib.RematConfig[remat_config.upper()]
+  config.use_flash_attention = use_flash_attention
+  if flash_attention_block_size is not None:
+    config.flash_attention_block_size = flash_attention_block_size
+  config.use_sliding_window_kv_cache = False
+  config.dtype = jnp.bfloat16
+  return config
 
 
 def _qwen3_config(
@@ -95,15 +124,28 @@ def create_model(
     model_dir: Directory holding the safetensors shards.
     mesh: Device mesh the parameters are sharded over.
     parameter_dtype: Storage dtype used when loading trainable parameters.
-    remat_config: Qwen rematerialization mode (none, block, or decoder).
-    use_flash_attention: Whether Qwen uses splash/flash attention.
-    flash_attention_block_size: Qwen flash-attention block size. `None` keeps
-      the default defined by `qwen3_model_lib.ModelConfig`.
+    remat_config: Rematerialization mode (none, block, or decoder).
+    use_flash_attention: Whether the model uses splash/flash attention.
+    flash_attention_block_size: Flash-attention block size. `None` keeps the
+      model config's default.
 
   Returns:
     An nnx module ready for training or serving.
   """
   normalized = model_name.lower().replace("_", "-")
+  if is_gemma4_model(normalized):
+    return gemma4_params_lib.create_model_from_safe_tensors(
+        model_dir,
+        _gemma4_config(
+            model_name,
+            remat_config=remat_config,
+            use_flash_attention=use_flash_attention,
+            flash_attention_block_size=flash_attention_block_size,
+        ),
+        mesh=mesh,
+        dtype=parameter_dtype,  # pyrefly: ignore[bad-argument-type]
+        text_only=True,
+    )
   if "gemma" in normalized:
     return gemma_params_lib.create_model_from_safe_tensors(
         model_dir, _gemma_config(model_name), mesh=mesh

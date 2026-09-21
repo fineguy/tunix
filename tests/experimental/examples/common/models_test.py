@@ -21,6 +21,7 @@ from absl.testing import parameterized
 from jax import numpy as jnp
 from tunix.experimental.examples.common import models
 from tunix.models.gemma import model as gemma_model_lib
+from tunix.models.gemma4 import model as gemma4_model_lib
 from tunix.models.qwen3 import model as qwen3_model_lib
 
 
@@ -114,7 +115,57 @@ class Qwen3ConfigTest(parameterized.TestCase):
     )
 
 
+class Gemma4ConfigTest(parameterized.TestCase):
+
+  def test_e2b_matches_frozenlake_training_overrides(self):
+    config = models._gemma4_config(
+        "gemma-4-e2b",
+        remat_config="decoder",
+        use_flash_attention=True,
+        flash_attention_block_size=256,
+    )
+
+    self.assertEqual(config.embed_dim, 1536)
+    self.assertEqual(config.num_layers, 35)
+    self.assertEqual(config.remat_config, gemma4_model_lib.RematConfig.DECODER)
+    self.assertTrue(config.use_flash_attention)
+    self.assertEqual(config.flash_attention_block_size, 256)
+    self.assertFalse(config.use_sliding_window_kv_cache)
+    self.assertEqual(config.dtype, jnp.bfloat16)
+
+  def test_unsupported_gemma4_model_raises(self):
+    with self.assertRaisesRegex(ValueError, "Unsupported gemma4 model_name"):
+      models._gemma4_config("gemma-4-e4b")
+
+
 class CreateModelTest(parameterized.TestCase):
+
+  def test_creates_gemma4_e2b_model_with_overrides(self):
+    mesh = mock.sentinel.mesh
+    with mock.patch.object(
+        models.gemma4_params_lib,
+        "create_model_from_safe_tensors",
+        autospec=True,
+        return_value=mock.sentinel.gemma4_model,
+    ) as create_gemma4:
+      model = models.create_model(
+          "gemma-4-e2b",
+          "/tmp/gemma4",
+          mesh,
+          parameter_dtype=jnp.float32,
+          remat_config="decoder",
+          use_flash_attention=True,
+          flash_attention_block_size=256,
+      )
+
+    self.assertIs(model, mock.sentinel.gemma4_model)
+    create_gemma4.assert_called_once()
+    args, kwargs = create_gemma4.call_args
+    self.assertEqual(args[0], "/tmp/gemma4")
+    self.assertIsInstance(args[1], gemma4_model_lib.ModelConfig)
+    self.assertIs(kwargs["mesh"], mesh)
+    self.assertEqual(kwargs["dtype"], jnp.float32)
+    self.assertTrue(kwargs["text_only"])
 
   def test_creates_gemma_model(self):
     mesh = mock.sentinel.mesh

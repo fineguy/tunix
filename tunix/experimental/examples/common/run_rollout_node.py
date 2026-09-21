@@ -46,6 +46,8 @@ REPO_ROOT = os.path.abspath(
 os.environ.setdefault("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
 
 CHAT_PARSERS = {
+    "gemma-4": chat_parser_lib.Gemma4ChatTemplateParser,
+    "gemma4": chat_parser_lib.Gemma4ChatTemplateParser,
     "qwen": chat_parser_lib.QwenChatTemplateParser,
     "llama": chat_parser_lib.LlamaChatTemplateParser,
     "gemma": chat_parser_lib.GemmaChatTemplateParser,
@@ -91,6 +93,39 @@ def _chat_parser_for(
   return chat_parser_lib.DefaultChatTemplateParser(
       tokenizer, enable_thinking=enable_thinking
   )
+
+
+def _mapping_config_for(model_name: str):
+  """Returns the Tunix-to-vLLM JAX mapping for a supported model family."""
+  from tunix.generate import (  # pylint: disable=g-import-not-at-top
+      mappings as mappings_lib,
+  )
+
+  if models.is_gemma4_model(model_name):
+    from tunix.models.gemma4 import (  # pylint: disable=g-import-not-at-top
+        mapping_vllm_jax,
+    )
+  elif "qwen3" in model_name.lower().replace("_", "-"):
+    from tunix.models.qwen3 import (  # pylint: disable=g-import-not-at-top
+        mapping_vllm_jax,
+    )
+  else:
+    raise ValueError(
+        "The in-process distributed rollout supports Qwen3 and Gemma4 "
+        f"mappings; got model {model_name!r}."
+    )
+  return mappings_lib.MappingConfig(**mapping_vllm_jax.VLLM_JAX_MAPPING)
+
+
+def _gemma4_vllm_overrides(model_name: str) -> dict[str, Any] | None:
+  """Matches the text-only Gemma4 rollout configuration in FrozenLake."""
+  if not models.is_gemma4_model(model_name):
+    return None
+  return {
+      "final_logit_softcapping": 30.0,
+      "text_config": {"final_logit_softcapping": 30.0},
+      "architectures": ["Gemma4ForCausalLM"],
+  }
 
 
 def _str2bool(v: str | bool) -> bool:
@@ -461,19 +496,10 @@ def _create_inprocess_vllm_sampler(args, tokenizer):
       rollout_worker,
   )
   from tunix.generate import (  # pylint: disable=g-import-not-at-top
-      mappings as mappings_lib,
-  )
-  from tunix.generate import (  # pylint: disable=g-import-not-at-top
       tokenizer_adapter as tokenizer_adapter_lib,
   )
-  from tunix.models.qwen3 import (  # pylint: disable=g-import-not-at-top
-      mapping_vllm_jax,
-  )
-
   logging.info("Creating vLLM mapping config...")
-  mapping_config = mappings_lib.MappingConfig(
-      **mapping_vllm_jax.VLLM_JAX_MAPPING
-  )
+  mapping_config = _mapping_config_for(args.model_id or args.model_name)
   vllm_model = (
       args.model_dir
       if (
@@ -500,6 +526,11 @@ def _create_inprocess_vllm_sampler(args, tokenizer):
       "async_scheduling": args.vllm_async_scheduling,
       "dtype": args.vllm_dtype,
   }
+  gemma4_overrides = _gemma4_vllm_overrides(args.model_id or args.model_name)
+  if gemma4_overrides is not None:
+    engine_kwargs["hf_overrides"] = gemma4_overrides
+    engine_kwargs["kv_cache_metrics"] = True
+    engine_kwargs["disable_log_stats"] = False
   if args.vllm_max_num_seqs is not None:
     engine_kwargs["max_num_seqs"] = args.vllm_max_num_seqs
   if args.vllm_max_num_batched_tokens is not None:
@@ -563,6 +594,11 @@ def _create_inprocess_vllm_sampler(args, tokenizer):
       lora_config=lora_config,
       mapping_config=mapping_config,
       additional_config=maxtext_additional_config,
+      sampling_kwargs=(
+          {"skip_special_tokens": False}
+          if gemma4_overrides is not None
+          else {}
+      ),
       engine_kwargs=engine_kwargs,
       eos_tokens=_eos_token_ids(args, tokenizer),
   )
@@ -636,6 +672,9 @@ def _create_vllm_sampler(args, tokenizer):
       enable_prefix_caching=args.enable_prefix_caching,
       async_scheduling=args.vllm_async_scheduling,
   )
+  gemma4_overrides = _gemma4_vllm_overrides(args.model_id or args.model_name)
+  if gemma4_overrides is not None:
+    engine_kwargs["hf_overrides"] = gemma4_overrides
   if args.vllm_max_num_seqs is not None:
     engine_kwargs["max_num_seqs"] = args.vllm_max_num_seqs
   if args.vllm_max_num_batched_tokens is not None:

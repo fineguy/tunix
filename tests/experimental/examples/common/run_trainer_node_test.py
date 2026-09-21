@@ -460,11 +460,16 @@ class RunTrainerNodeMainAndShutdownTest(absltest.TestCase):
     args = run_trainer_node._parse_args([
         "--max_seq_token_per_tpu",
         "4096",
+        "--rollout_mesh_tp",
+        "4",
     ])
     run_trainer_node._create_tunix_trainer_factory(args)
     mock_training_config.assert_called_once()
     self.assertNotIn(
         "max_seq_token_per_tpu", mock_training_config.call_args.kwargs
+    )
+    self.assertEqual(
+        mock_training_config.call_args.kwargs["rollout_tp_size"], 4
     )
 
   def test_main_raises_without_discovery_context(self):

@@ -105,6 +105,11 @@ class TrainingConfig:
   # large budgets; ``pack_sequences`` raises if a pack exceeds it.
   max_segments_per_packed_row: int | None = None
 
+  # Tensor-parallel degree of the rollout destination. Model-specific mapping
+  # hooks use it to materialize the destination's sharded weight layout before
+  # Raiden binds the trainer-side staging buffers.
+  rollout_tp_size: int = 1
+
   def get_with_default(self, key: str, default: Any) -> Any:
     val = getattr(self, key)
     if val is None:
@@ -1280,14 +1285,18 @@ class PeftTrainer(abstract_trainer.AbstractTrainer):
     ):
       from tunix.generate import utils as gen_utils  # pylint: disable=g-import-not-at-top
 
+      src_state = nnx.state(self.model)
+      if mapping_config.preprocess_src_state is not None:
+        src_state = mapping_config.preprocess_src_state(src_state)
       converted_state = gen_utils.transfer_state_with_mappings(
-          src_state=nnx.state(self.model),
+          src_state=src_state,
           dst_state=self._target_state,
           key_mappings=mapping_config.to_hf_mappings,
           key_mapping_hook_fns=mapping_config.to_hf_hook_fns,
           transpose_keys=mapping_config.to_hf_transpose_keys,
           reshard_fn=None,
           rollout_engine=backend,
+          tp_size=self.config.rollout_tp_size,
       )
       worker.bind(converted_state)
     else:

@@ -728,6 +728,7 @@ def _create_tunix_trainer_factory(args) -> tuple[Any, Mesh]:
       metrics_prefix="actor",
       pbar_description="Actor Training",
       data_sharding_axis=("fsdp",),
+      rollout_tp_size=args.rollout_mesh_tp or 1,
       checkpointing_options=checkpointing_options,
       checkpoint_root_directory=_checkpoint_root_directory(args),
       # No max_seq_token_per_tpu here. Under the orchestrator the trainer never
