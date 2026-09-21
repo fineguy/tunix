@@ -134,6 +134,8 @@ fi
 export MAXTEXT_OUTPUT_DIR=${MAXTEXT_OUTPUT_DIR:-artifacts/deepswe_dist/maxtext}
 export TRAINER_MESH_TP=${TRAINER_MESH_TP:-1}
 export TRAINER_MESH_EXPERT=${TRAINER_MESH_EXPERT:-1}
+# Context-parallel degree for the trainer; shards the sequence axis.
+export TRAINER_MESH_CONTEXT=${TRAINER_MESH_CONTEXT:-1}
 # Padded MoE MLP intermediate dimension; must match rollout TP padding for MoE models.
 export TRAINER_PADDED_MOE_MLP_DIM=${TRAINER_PADDED_MOE_MLP_DIM:-}
 export TRAINER_BASE_NUM_KV_HEADS=${TRAINER_BASE_NUM_KV_HEADS:-${BASE_NUM_KV_HEADS:-}}
@@ -386,6 +388,7 @@ start_trainer() {
       --maxtext_ckpt_path=${MAXTEXT_CKPT} \
       --maxtext_output_directory=${MAXTEXT_OUTPUT_DIR} \
       --mesh_expert=${TRAINER_MESH_EXPERT} \
+      $( [[ "${TRAINER_MESH_CONTEXT:-1}" -gt 1 ]] && echo "--mesh_context=${TRAINER_MESH_CONTEXT}" ) \
       ${ROLLOUT_MESH_TP:+--rollout_mesh_tp=${ROLLOUT_MESH_TP}} \
       ${TRAINER_BASE_NUM_KV_HEADS:+--base_num_kv_heads=${TRAINER_BASE_NUM_KV_HEADS}} \
       ${TRAINER_MAXTEXT_ATTENTION:+--maxtext_attention=${TRAINER_MAXTEXT_ATTENTION}} \
@@ -465,6 +468,7 @@ start_trainer() {
         --mesh_fsdp=${TRAINER_MESH_FSDP} \
         --mesh_tp=${TRAINER_MESH_TP} \
         --mesh_expert=${TRAINER_MESH_EXPERT} \
+      $( [[ "${TRAINER_MESH_CONTEXT:-1}" -gt 1 ]] && echo "--mesh_context=${TRAINER_MESH_CONTEXT}" ) \
         --trainer_backend=${TRAINER_BACKEND} \
         --model_name=${MODEL_NAME} \
         --model_id=${MODEL_ID} \
