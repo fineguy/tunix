@@ -108,11 +108,8 @@ COPY . .
 RUN uv pip install grpcio-tools
 RUN cd /app && find tunix/experimental/distributed -name "*.proto" -exec python -m grpc_tools.protoc -I/app --python_out=/app --grpc_python_out=/app {} +
 
-# Install Tunix in editable mode and register MaxText vLLM adapter + Raiden
-RUN uv pip install --no-deps -e . && \
-    RAIDEN_WHEEL_DIR="/app/raiden_wheels" bash /app/scripts/install_raiden.sh && \
-    uv pip install --no-deps /opt/venv/lib/python3.12/site-packages/maxtext/integration/vllm && \
-    uv pip install git+https://github.com/mlcommons/logging.git
+# Install Tunix in editable mode
+RUN uv pip install --no-deps -e .
 
 
 
