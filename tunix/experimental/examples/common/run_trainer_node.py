@@ -389,6 +389,26 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
       help="Rollout TP degree to align MaxText MoE MLP dimensions with.",
   )
   parser.add_argument(
+      "--maxtext_attention",
+      type=str,
+      default=os.environ.get("TRAINER_MAXTEXT_ATTENTION", ""),
+      help="MaxText attention implementation (e.g. flash, dot_product).",
+  )
+  parser.add_argument(
+      "--remat_policy",
+      type=str,
+      default="",
+      help="Rematerialization policy (e.g. full, minimal, decoder).",
+  )
+  parser.add_argument(
+      "--learning_rate_final_fraction",
+      "--maxtext_learning_rate_final_fraction",
+      dest="learning_rate_final_fraction",
+      type=float,
+      default=None,
+      help="Final learning rate fraction for MaxText LR schedule.",
+  )
+  parser.add_argument(
       "--base_num_kv_heads",
       type=int,
       default=0,
@@ -648,6 +668,9 @@ def _create_maxtext_trainer_factory(args) -> tuple[Any, Mesh]:
       max_seq_token_per_tpu=args.max_seq_token_per_tpu,
       trainable_parameters_mask=args.trainable_parameters_mask,
       base_num_kv_heads=args.base_num_kv_heads,
+      attention=args.maxtext_attention or None,
+      remat_policy=args.remat_policy,
+      learning_rate_final_fraction=args.learning_rate_final_fraction,
   )
   logging.info("Creating MaxText device mesh...")
   mesh = maxtext_utils.create_maxtext_mesh(maxtext_config)

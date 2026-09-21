@@ -4,9 +4,17 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Fill these before you run.
+export JOB_PREFIX="${JOB_PREFIX:-$USER}"
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
-export MAXTEXT_OUTPUT_DIR="${MAXTEXT_OUTPUT_DIR:-}"
-export TUNIX_IMAGE="${TUNIX_IMAGE:-gcr.io/cloud-tpu-multipod-dev/${USER:-niting}/trellis-35b:latest}"
+export WANDB_RUN_NAME="${WANDB_RUN_NAME:-${JOB_PREFIX}-mlperf-35b}"
+export MAXTEXT_OUTPUT_DIR="${MAXTEXT_OUTPUT_DIR:-gs://atwigg-trellis-europe-west4-dev/maxtext/${JOB_PREFIX}}"
+export TRAJECTORY_LOG_DIR="${TRAJECTORY_LOG_DIR:-gs://atwigg-trellis-europe-west4-dev/trajectories/${JOB_PREFIX}}"
+export ORCHESTRATOR_PORT="${ORCHESTRATOR_PORT:-20000}"
+export ROLLOUT_PORT="${ROLLOUT_PORT:-20001}"
+export TRAINER_PORT="${TRAINER_PORT:-20002}"
+export PROFILER_STEPS=0
+export SKIP_FIRST_N_PROFILER_STEPS=-1
+export TUNIX_IMAGE="${TUNIX_IMAGE:-gcr.io/cloud-tpu-multipod-dev/${USER:-atwigg}/trellis-35b:latest}"
 
 export PROJECT="cloud-tpu-shared-capacity"
 export REGION="europe-west4"
@@ -21,8 +29,8 @@ export SERVICE_ACCOUNT="xpk-sa"
 export CPU_MACHINE="n2d-standard-64"
 
 # Pathways & Raiden Images and settings (from Google doc)
-export PATHWAYS_SERVER_IMAGE="us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/datenglin/unsanitized_server:raiden_20260914_fix"
-export PATHWAYS_PROXY_IMAGE="us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/datenglin/unsanitized_proxy_server:raiden_20260914"
+export PATHWAYS_SERVER_IMAGE="${PATHWAYS_SERVER_IMAGE:-us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/datenglin/unsanitized_server:raiden_20260920_v2}"
+export PATHWAYS_PROXY_IMAGE="${PATHWAYS_PROXY_IMAGE:-us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/datenglin/unsanitized_proxy_server:raiden_20260920_v2}"
 export PATHWAYS_PROXY_MEMORY_LIMIT="160G"
 export USER_CONTAINER_MEMORY="260G"
 export USER_CONTAINER_MEMORY_LIMIT="${USER_CONTAINER_MEMORY_LIMIT:-260G}"
@@ -44,9 +52,9 @@ export MODEL_ID="Qwen/Qwen3.5-35B-A3B"
 export TOKENIZER_PATH="Qwen/Qwen3.5-35B-A3B"
 export MAXTEXT_MODEL_NAME="qwen3.5-35b-a3b"
 export MAXTEXT_CKPT="gs://hengtaoguo-maxtext-logs/checkpoints/qwen3.5-35b-a3b/scanned/2026-06-11-10-27/0/items"
-export TRAINABLE_PARAMETERS_MASK='["^(?!.*routed_experts/gate/kernel).*"]'
+export TRAINABLE_PARAMETERS_MASK='^(?!.*routed_experts/gate/kernel).*'
 export EOS_TOKENS="${EOS_TOKENS:-151645,151643}"
-export TRAJECTORY_LOG_DIR="${TRAJECTORY_LOG_DIR:-gs://deepswe-wuhao-1784153479/trajectories}"
+export TRAJECTORY_LOG_DIR="${TRAJECTORY_LOG_DIR:-gs://atwigg-trellis-europe-west4-dev/trajectories}"
 
 # Backend configuration
 export TRAINER_BACKEND="maxtext"
@@ -55,8 +63,8 @@ export WEIGHT_SYNC_MODE="raiden"
 
 # Topologies (64 chips Trainer 4x4x4, 16x 4-chip Rollout slices)
 export TRAINER_JOBSET_YAML="jobset.pathways.yaml"
-export TRAINER_TPU_SLICE="tpuv5:4x4x8"
-export TRAINER_MESH_FSDP=64
+export TRAINER_TPU_SLICE="tpuv5:4x4x4"
+export TRAINER_MESH_FSDP=32
 export TRAINER_MESH_TP=2
 export TRAINER_MESH_EXPERT=1
 export TRAINER_BASE_NUM_KV_HEADS=2
@@ -74,7 +82,7 @@ export ROLLOUT_REPLICAS=16
 export VLLM_LOGGING_LEVEL="INFO"
 export VLLM_MAX_MODEL_LEN=65536
 export VLLM_MAX_NUM_BATCHED_TOKENS=2048
-export VLLM_MAX_NUM_SEQS=8
+export VLLM_MAX_NUM_SEQS=16
 export VLLM_GPU_MEMORY_UTILIZATION="0.9"
 
 # Sharding Configs
@@ -85,10 +93,12 @@ export VLLM_ENABLE_EXPERT_PARALLEL="true"
 export VLLM_ADDITIONAL_CONFIG='{"sharding":{"sharding_strategy":{"expert_parallelism":4,"tensor_parallelism":1,"enable_dp_attention":true}},"custom_mamba_cache_multiplier":16,"maxtext_config":{"scan_layers":false,"attention":"vllm_rpa","allow_split_physical_axes":true,"use_multimodal":false,"prefuse_moe_weights":true}}'
 
 # Prefix Caching Configs
-export ENABLE_PREFIX_CACHING="true"
-export VLLM_PREFIX_CACHE_RETENTION_INTERVAL=256
+export ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-false}"
+export VLLM_PREFIX_CACHE_RETENTION_INTERVAL="${VLLM_PREFIX_CACHE_RETENTION_INTERVAL:-256}"
+export VLLM_MAMBA_CACHE_MODE="${VLLM_MAMBA_CACHE_MODE:-${MAMBA_CACHE_MODE:-none}}"
 
 # KV Cache Configs
+export ROLLOUT_FREE_KV_CACHE="false"
 export VLLM_KV_CACHE_DTYPE="bfloat16"
 export VLLM_BLOCK_SIZE=256
 
@@ -124,13 +134,14 @@ export VLLM_ENABLE_V1_MULTIPROCESSING=0
 # ==============================================================================
 # Hyperparameters & DeepSWE Pipeline Configuration
 # ==============================================================================
-export MAX_STEPS=${MAX_STEPS:-100}
+export MAX_STEPS=${MAX_STEPS:-50}
 export BATCH_SIZE=16
 export MINI_BATCH_SIZE=${BATCH_SIZE}
 export NUM_GENERATIONS=16
-export TRAIN_MICRO_BATCH_SIZE=64
-export CHECKPOINT_SAVE_INTERVAL_STEPS=2
+export TRAIN_MICRO_BATCH_SIZE="${TRAIN_MICRO_BATCH_SIZE:-32}"
+export CHECKPOINT_SAVE_INTERVAL_STEPS=0
 export CHECKPOINT_MAX_TO_KEEP=10
+export MAX_STALENESS=0
 
 # Sampling Parameters (explicitly disable top-k, set top-p 1.0 and temperature 1.0)
 export TEMPERATURE="1.0"
@@ -163,7 +174,7 @@ export WARMUP_STEPS_FRACTION=0.0
 export LEARNING_RATE_FINAL_FRACTION=1.0
 
 # Architecture & Rematerialization
-export REMAT_POLICY="decoder"
+export REMAT_POLICY="full"
 export TRAINER_MAXTEXT_ATTENTION="flash"
 export COMPUTE_LOGPS_CHUNK_SIZE=512
 
@@ -176,6 +187,7 @@ export USE_AGENT_SANDBOX=1
 export SANDBOX_NAMESPACE="trellis"
 export SANDBOX_NODE_SELECTOR_KEY="cloud.google.com/gke-nodepool"
 export SANDBOX_NODE_SELECTOR_VAL="sandbox-cpu-pool"
+export IMAGE_REWRITE_PREFIX="${IMAGE_REWRITE_PREFIX:-europe-west4-docker.pkg.dev/cloud-tpu-multipod-dev/tunix/}"
 export MAX_WARMPOOL_REPLICAS=2
 export ROLLOUT_MAX_CONCURRENCY=256
 export MAX_CONCURRENCY=256

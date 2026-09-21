@@ -78,7 +78,9 @@ export SAMPLER=${SAMPLER:-inprocess_vllm}
 export WEIGHT_SYNC_MODE=${WEIGHT_SYNC_MODE:-none}
 export CHECKPOINT_SAVE_INTERVAL_STEPS=${CHECKPOINT_SAVE_INTERVAL_STEPS:-5}
 export CHECKPOINT_MAX_TO_KEEP=${CHECKPOINT_MAX_TO_KEEP:-2}
-export REMAT_CONFIG=${REMAT_CONFIG:-decoder}
+export REMAT_POLICY=${REMAT_POLICY:-decoder}
+export LEARNING_RATE_FINAL_FRACTION=${LEARNING_RATE_FINAL_FRACTION:-}
+export OVERLONG_FILTER=${OVERLONG_FILTER:-}
 export TRAINABLE_PARAMETERS_MASK=${TRAINABLE_PARAMETERS_MASK:-}
 
 # Optional GRPO algorithm options. Empty, or 0 for the boolean, leaves the
@@ -92,6 +94,11 @@ export TIS_TYPE=${TIS_TYPE:-${TRUNCATED_IMPORTANCE_SAMPLING_TYPE:-}}
 export TIS_RATIO_MIN=${TIS_RATIO_MIN:-${TRUNCATED_IMPORTANCE_SAMPLING_RATIO_MIN:-}}
 export TIS_RATIO=${TIS_RATIO:-${TRUNCATED_IMPORTANCE_SAMPLING_RATIO:-}}
 export SAMPLER_IS_LENGTH_BUCKETS=${SAMPLER_IS_LENGTH_BUCKETS:-}
+export MAX_STALENESS=${MAX_STALENESS:-}
+export PROFILER_STEPS=${PROFILER_STEPS:-0}
+export SKIP_FIRST_N_PROFILER_STEPS=${SKIP_FIRST_N_PROFILER_STEPS:-}
+export PROFILER_PERIOD=${PROFILER_PERIOD:-}
+export ROLLOUT_FREE_KV_CACHE=${ROLLOUT_FREE_KV_CACHE:-false}
 
 # DeepSWE dataset and environment configuration
 export DATASET_NAME=${DATASET_NAME:-R2E-Gym/R2E-Gym-Subset}
@@ -106,6 +113,7 @@ export USE_AGENT_SANDBOX=${USE_AGENT_SANDBOX:-1}
 export SANDBOX_NAMESPACE=${SANDBOX_NAMESPACE:-rl-tunix-swebench}
 export SANDBOX_NODE_SELECTOR_KEY=${SANDBOX_NODE_SELECTOR_KEY:-}
 export SANDBOX_NODE_SELECTOR_VAL=${SANDBOX_NODE_SELECTOR_VAL:-}
+export IMAGE_REWRITE_PREFIX=${IMAGE_REWRITE_PREFIX:-}
 export STEP_TIMEOUT_SECS=${STEP_TIMEOUT_SECS:-1800}
 export REWARD_TIMEOUT_SECS=${REWARD_TIMEOUT_SECS:-1800}
 export ROLLOUT_MAX_CONCURRENCY=${ROLLOUT_MAX_CONCURRENCY:-64}
@@ -134,6 +142,7 @@ export ROLLOUT_MESH_FSDP=${ROLLOUT_MESH_FSDP:-1}
 # Optional: enable experimental batched-RPA attention kernel for rollout.
 export ROLLOUT_USE_BATCHED_RPA=${ROLLOUT_USE_BATCHED_RPA:-}
 export ROLLOUT_MAXTEXT_ATTENTION=${ROLLOUT_MAXTEXT_ATTENTION:-}
+export TRAINER_MAXTEXT_ATTENTION=${TRAINER_MAXTEXT_ATTENTION:-}
 
 # Logs source/destination Raiden tensor checksums on both the trainer and
 # rollout sides during weight sync, for cross-verification of a real run.
@@ -159,14 +168,15 @@ export LIBTPU_INIT_ARGS=${LIBTPU_INIT_ARGS:-}
 export VLLM_ENABLE_V1_MULTIPROCESSING=${VLLM_ENABLE_V1_MULTIPROCESSING:-}
 export ROLLOUT_ENV_FLAGS=${ROLLOUT_ENV_FLAGS:-}
 
-export ORCHESTRATOR_ID=$USER-orch
-export ORCHESTRATOR_PORT=20000
+JOB_PREFIX=${JOB_PREFIX:-$USER}
+export ORCHESTRATOR_ID=${ORCHESTRATOR_ID:-$JOB_PREFIX-orch}
+export ORCHESTRATOR_PORT=${ORCHESTRATOR_PORT:-20000}
 
-export ROLLOUT_ID=$USER-roll
-export ROLLOUT_PORT=20001
+export ROLLOUT_ID=${ROLLOUT_ID:-$JOB_PREFIX-roll}
+export ROLLOUT_PORT=${ROLLOUT_PORT:-20001}
 
-export TRAINER_ID=$USER-train
-export TRAINER_PORT=20002
+export TRAINER_ID=${TRAINER_ID:-$JOB_PREFIX-train}
+export TRAINER_PORT=${TRAINER_PORT:-20002}
 
 export CPU_MACHINE=${CPU_MACHINE:-n2-standard-64}
 export GCS_SCRATCH_LOCATION=${GCS_SCRATCH_LOCATION:-gs://cloud-pathways-staging/tmp}
@@ -217,9 +227,22 @@ stop_orchestrator() {
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "kubectl delete jobset ${ORCHESTRATOR_ID} -n ${K8S_NAMESPACE}"
     echo "kubectl delete workload -l jobset.sigs.k8s.io/jobset-name=${ORCHESTRATOR_ID} -n ${K8S_NAMESPACE}"
+    if [[ "${USE_AGENT_SANDBOX}" == "1" || "${USE_AGENT_SANDBOX}" == "true" || "${USE_AGENT_SANDBOX}" == "True" ]]; then
+      echo "kubectl delete sandboxwarmpools -n ${SANDBOX_NAMESPACE} -l app.kubernetes.io/created-by=${ORCHESTRATOR_ID} --ignore-not-found=true"
+      echo "kubectl delete sandboxtemplates -n ${SANDBOX_NAMESPACE} -l app.kubernetes.io/created-by=${ORCHESTRATOR_ID} --ignore-not-found=true"
+      echo "kubectl delete sandboxclaims -n ${SANDBOX_NAMESPACE} -l app.kubernetes.io/created-by=${ORCHESTRATOR_ID} --ignore-not-found=true"
+      echo "kubectl delete pods -n ${SANDBOX_NAMESPACE} -l app.kubernetes.io/created-by=${ORCHESTRATOR_ID} --force --grace-period=0 --ignore-not-found=true"
+    fi
   else
     kubectl delete jobset "${ORCHESTRATOR_ID}" -n "${K8S_NAMESPACE}" --ignore-not-found=true
     kubectl delete workload -l "jobset.sigs.k8s.io/jobset-name=${ORCHESTRATOR_ID}" -n "${K8S_NAMESPACE}" --ignore-not-found=true 2>/dev/null || true
+    if [[ "${USE_AGENT_SANDBOX}" == "1" || "${USE_AGENT_SANDBOX}" == "true" || "${USE_AGENT_SANDBOX}" == "True" ]]; then
+      echo "Cleaning up sandboxes and warmpools for ${ORCHESTRATOR_ID} in ${SANDBOX_NAMESPACE}..."
+      kubectl delete sandboxwarmpools -n "${SANDBOX_NAMESPACE}" -l "app.kubernetes.io/created-by=${ORCHESTRATOR_ID}" --ignore-not-found=true 2>/dev/null || true
+      kubectl delete sandboxtemplates -n "${SANDBOX_NAMESPACE}" -l "app.kubernetes.io/created-by=${ORCHESTRATOR_ID}" --ignore-not-found=true 2>/dev/null || true
+      kubectl delete sandboxclaims -n "${SANDBOX_NAMESPACE}" -l "app.kubernetes.io/created-by=${ORCHESTRATOR_ID}" --ignore-not-found=true 2>/dev/null || true
+      kubectl delete pods -n "${SANDBOX_NAMESPACE}" -l "app.kubernetes.io/created-by=${ORCHESTRATOR_ID}" --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true
+    fi
   fi
 }
 
@@ -235,12 +258,20 @@ start_orchestrator() {
   local sandbox_env=""
   local sandbox_arg=""
   if [[ "${USE_AGENT_SANDBOX}" == "1" || "${USE_AGENT_SANDBOX}" == "true" || "${USE_AGENT_SANDBOX}" == "True" ]]; then
-    sandbox_env="NAMESPACE=\"${SANDBOX_NAMESPACE}\" ${SANDBOX_NODE_SELECTOR_KEY:+NODE_SELECTOR_KEY=\"${SANDBOX_NODE_SELECTOR_KEY}\"} ${SANDBOX_NODE_SELECTOR_VAL:+NODE_SELECTOR_VAL=\"${SANDBOX_NODE_SELECTOR_VAL}\"}"
+    sandbox_env="NAMESPACE=\"${SANDBOX_NAMESPACE}\" ${SANDBOX_NODE_SELECTOR_KEY:+NODE_SELECTOR_KEY=\"${SANDBOX_NODE_SELECTOR_KEY}\"} ${SANDBOX_NODE_SELECTOR_VAL:+NODE_SELECTOR_VAL=\"${SANDBOX_NODE_SELECTOR_VAL}\"} ${IMAGE_REWRITE_PREFIX:+IMAGE_REWRITE_PREFIX=\"${IMAGE_REWRITE_PREFIX}\"}"
     sandbox_arg="--use_agent_sandbox"
+  elif [[ -n "${IMAGE_REWRITE_PREFIX}" ]]; then
+    sandbox_env="IMAGE_REWRITE_PREFIX=\"${IMAGE_REWRITE_PREFIX}\""
   fi
   local overlong_arg=""
   if [[ "${OVERLONG_LOSS_MASKING}" == "1" || "${OVERLONG_LOSS_MASKING}" == "true" || "${OVERLONG_LOSS_MASKING}" == "True" ]]; then
     overlong_arg="--overlong_loss_masking"
+  fi
+  local overlong_filter_arg=""
+  if [[ "${OVERLONG_FILTER}" == "1" || "${OVERLONG_FILTER}" == "true" || "${OVERLONG_FILTER}" == "True" ]]; then
+    overlong_filter_arg="--overlong_filter"
+  elif [[ "${OVERLONG_FILTER}" == "0" || "${OVERLONG_FILTER}" == "false" || "${OVERLONG_FILTER}" == "False" ]]; then
+    overlong_filter_arg="--no-overlong_filter"
   fi
   local debug_arg=""
   if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || "${DEBUG}" == "True" ]]; then
@@ -254,6 +285,7 @@ start_orchestrator() {
     --worker_container_image="${TUNIX_IMAGE}" \
     --worker_container_port="${ORCHESTRATOR_PORT}" \
     --worker_startup_command=" \
+      ORCHESTRATOR_ID=\"${ORCHESTRATOR_ID}\" \
       ${sandbox_env} \
       ${SCAFFOLD:+SCAFFOLD=\"${SCAFFOLD}\"} \
       ${WANDB_API_KEY:+WANDB_API_KEY=\"${WANDB_API_KEY}\"} \
@@ -290,6 +322,7 @@ start_orchestrator() {
         ${LOSS_AGG_MODE:+--loss_agg_mode=${LOSS_AGG_MODE}} \
         ${ADVANTAGE_ESTIMATOR:+--advantage_estimator=${ADVANTAGE_ESTIMATOR}} \
         ${overlong_arg} \
+        ${overlong_filter_arg} \
         ${SEQ_LOGPROB_ERROR_THRESHOLD:+--seq_logprob_error_threshold=${SEQ_LOGPROB_ERROR_THRESHOLD}} \
         ${TIS_TYPE:+--truncated_importance_sampling_type=${TIS_TYPE}} \
         ${TIS_RATIO_MIN:+--truncated_importance_sampling_ratio_min=${TIS_RATIO_MIN}} \
@@ -312,14 +345,16 @@ start_orchestrator() {
         --stop_workers_on_exit \
         ${MAX_WARMPOOL_REPLICAS:+--max_warmpool_replicas=${MAX_WARMPOOL_REPLICAS}} \
         ${MAX_CONCURRENCY:+--max_concurrency=${MAX_CONCURRENCY}} \
+        ${MAX_STALENESS:+--max_staleness=${MAX_STALENESS}} \
         $([[ "${USE_ROLLOUT_LOGPS}" == "false" || "${USE_ROLLOUT_LOGPS}" == "False" || "${USE_ROLLOUT_LOGPS}" == "0" ]] && echo --no-use_rollout_logps || echo --use_rollout_logps) \
         ${dataset_args} \
         ${shuffle_arg} \
         ${sandbox_arg} \
+        ${IMAGE_REWRITE_PREFIX:+--image_rewrite_prefix=${IMAGE_REWRITE_PREFIX}} \
         ${MAX_SEQ_TOKEN_PER_TPU:+--max_seq_token_per_tpu=${MAX_SEQ_TOKEN_PER_TPU}} \
         ${MAX_SEGMENTS_PER_PACKED_ROW:+--max_segments_per_packed_row=${MAX_SEGMENTS_PER_PACKED_ROW}} \
         ${TRAINER_MESH_FSDP:+--trainer_fsdp=${TRAINER_MESH_FSDP}} \
-        ${TRAINABLE_PARAMETERS_MASK:+--trainable_parameters_mask=\'${TRAINABLE_PARAMETERS_MASK}\'} \
+        ${TRAINABLE_PARAMETERS_MASK:+--trainable_parameters_mask='${TRAINABLE_PARAMETERS_MASK}'} \
         ${debug_arg} \
     " \
     | apply_manifest
@@ -346,6 +381,9 @@ start_trainer() {
       --mesh_expert=${TRAINER_MESH_EXPERT} \
       ${ROLLOUT_MESH_TP:+--rollout_mesh_tp=${ROLLOUT_MESH_TP}} \
       ${TRAINER_BASE_NUM_KV_HEADS:+--base_num_kv_heads=${TRAINER_BASE_NUM_KV_HEADS}} \
+      ${TRAINER_MAXTEXT_ATTENTION:+--maxtext_attention=${TRAINER_MAXTEXT_ATTENTION}} \
+      ${REMAT_POLICY:+--remat_policy=${REMAT_POLICY}} \
+      ${LEARNING_RATE_FINAL_FRACTION:+--learning_rate_final_fraction=${LEARNING_RATE_FINAL_FRACTION}} \
     "
   fi
   local opt_chain_args=""
@@ -362,6 +400,13 @@ start_trainer() {
   local debug_arg=""
   if [[ "${DEBUG}" == "1" || "${DEBUG}" == "true" || "${DEBUG}" == "True" ]]; then
     debug_arg="--debug"
+  fi
+  local profiler_args="--profiler_steps=${PROFILER_STEPS:-0}"
+  if [[ -n "${SKIP_FIRST_N_PROFILER_STEPS:-}" ]]; then
+    profiler_args+=" --skip_first_n_profiler_steps=${SKIP_FIRST_N_PROFILER_STEPS}"
+  fi
+  if [[ -n "${PROFILER_PERIOD:-}" ]]; then
+    profiler_args+=" --profiler_period=${PROFILER_PERIOD}"
   fi
   local raiden_env=""
   if [[ "${WEIGHT_SYNC_MODE}" == "raiden" ]]; then
@@ -392,11 +437,12 @@ start_trainer() {
       ${HF_TOKEN:+HF_TOKEN=\"${HF_TOKEN}\"} \
       ENABLE_PATHWAYS_PERSISTENCE=${ENABLE_PATHWAYS_PERSISTENCE} \
       ${CKPT_D2H_CONCURRENT_GB:+CKPT_D2H_CONCURRENT_GB=${CKPT_D2H_CONCURRENT_GB}} \
+      ${TRAINER_MAXTEXT_ATTENTION:+TRAINER_MAXTEXT_ATTENTION=\"${TRAINER_MAXTEXT_ATTENTION}\"} \
       ${raiden_env} \
       ${TRAINER_EXTRA_ENV:+${TRAINER_EXTRA_ENV}} \
       RAIDEN_DEVICES_PER_HOST=${RAIDEN_DEVICES_PER_HOST} \
       USE_WEIGHT_CONVERTER=${USE_WEIGHT_CONVERTER} \
-      PREFUSE_MOE_WEIGHTS=${ROLLOUT_PREFUSE_MOE_WEIGHTS} \
+      PREFUSE_MOE_WEIGHTS=${TRAINER_PREFUSE_MOE_WEIGHTS:-false} \
       ROLLOUT_PREFUSE_MOE_WEIGHTS=${ROLLOUT_PREFUSE_MOE_WEIGHTS} \
       ${ROLLOUT_MESH_TP:+ROLLOUT_MESH_TP=${ROLLOUT_MESH_TP}} \
       ${ROLLOUT_MESH_TP:+ROLLOUT_TENSOR_PARALLEL_SIZE=${ROLLOUT_MESH_TP}} \
@@ -447,7 +493,8 @@ start_trainer() {
         ${opt_chain_args} \
         ${lora_args} \
         ${maxtext_args} \
-        ${TRAINABLE_PARAMETERS_MASK:+--trainable_parameters_mask=\'${TRAINABLE_PARAMETERS_MASK}\'} \
+        ${profiler_args} \
+        ${TRAINABLE_PARAMETERS_MASK:+--trainable_parameters_mask='${TRAINABLE_PARAMETERS_MASK}'} \
         ${debug_arg} \
     " \
     | apply_manifest
@@ -507,6 +554,7 @@ if isinstance(cfg, dict):
       "VLLM_DATA_PARALLEL_SIZE": ("data_parallel_size", int),
       "VLLM_ENABLE_EXPERT_PARALLEL": ("enable_expert_parallel", lambda v: v.lower() in ("true", "1")),
       "VLLM_PREFIX_CACHE_RETENTION_INTERVAL": ("prefix_cache_retention_interval", int),
+      "VLLM_MAMBA_CACHE_MODE": ("mamba_cache_mode", str),
       "VLLM_KV_CACHE_DTYPE": ("kv_cache_dtype", str),
       "VLLM_BLOCK_SIZE": ("block_size", int),
       "VLLM_ASYNC_SCHEDULING": ("async_scheduling", lambda v: v.lower() in ("true", "1")),
@@ -553,7 +601,9 @@ if cfg:
   fi
   local sandbox_env=""
   if [[ "$USE_AGENT_SANDBOX" == "1" || "$USE_AGENT_SANDBOX" == "true" || "$USE_AGENT_SANDBOX" == "True" ]]; then
-    sandbox_env="NAMESPACE=\"${SANDBOX_NAMESPACE}\" ${SANDBOX_NODE_SELECTOR_KEY:+NODE_SELECTOR_KEY=\"${SANDBOX_NODE_SELECTOR_KEY}\"} ${SANDBOX_NODE_SELECTOR_VAL:+NODE_SELECTOR_VAL=\"${SANDBOX_NODE_SELECTOR_VAL}\"}"
+    sandbox_env="NAMESPACE=\"${SANDBOX_NAMESPACE}\" ${SANDBOX_NODE_SELECTOR_KEY:+NODE_SELECTOR_KEY=\"${SANDBOX_NODE_SELECTOR_KEY}\"} ${SANDBOX_NODE_SELECTOR_VAL:+NODE_SELECTOR_VAL=\"${SANDBOX_NODE_SELECTOR_VAL}\"} ${IMAGE_REWRITE_PREFIX:+IMAGE_REWRITE_PREFIX=\"${IMAGE_REWRITE_PREFIX}\"}"
+  elif [[ -n "${IMAGE_REWRITE_PREFIX}" ]]; then
+    sandbox_env="IMAGE_REWRITE_PREFIX=\"${IMAGE_REWRITE_PREFIX}\""
   fi
   for i in $(seq ${ROLLOUT_START_INDEX:-0} $((ROLLOUT_REPLICAS - 1))); do
     local replica_id="${ROLLOUT_ID}"
@@ -581,6 +631,7 @@ if cfg:
         ROLLOUT_TENSOR_PARALLEL_SIZE=${ROLLOUT_MESH_TP} \
         PREFUSE_MOE_WEIGHTS=${ROLLOUT_PREFUSE_MOE_WEIGHTS} \
         ENABLE_PREFIX_CACHING=${ENABLE_PREFIX_CACHING} \
+        ROLLOUT_FREE_KV_CACHE=${ROLLOUT_FREE_KV_CACHE} \
         VLLM_MAX_NUM_SEQS=${VLLM_MAX_NUM_SEQS:-8} \
         VLLM_GPU_MEMORY_UTILIZATION=${VLLM_GPU_MEMORY_UTILIZATION:-0.9} \
         ${NUM_PRECOMPILE_WORKERS:+NUM_PRECOMPILE_WORKERS=${NUM_PRECOMPILE_WORKERS}} \
@@ -616,6 +667,7 @@ if cfg:
           --weight_sync_mode=${WEIGHT_SYNC_MODE} \
           --prefuse_moe_weights=${ROLLOUT_PREFUSE_MOE_WEIGHTS} \
           --enable_prefix_caching=${ENABLE_PREFIX_CACHING} \
+          --free_kv_cache_during_weight_sync=${ROLLOUT_FREE_KV_CACHE} \
           --registry_module=tunix.experimental.examples.deepswe_dist.deepswe \
           --env_name=deepswe_env \
           --agent_name=deepswe_agent \
@@ -695,6 +747,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --vllm_config_json=*)
       VLLM_CONFIG_JSON="${1#*=}"
+      shift
+      ;;
+    --image_rewrite_prefix)
+      IMAGE_REWRITE_PREFIX="$2"
+      shift 2
+      ;;
+    --image_rewrite_prefix=*)
+      IMAGE_REWRITE_PREFIX="${1#*=}"
       shift
       ;;
     start|stop|orchestrator|trainer|rollout|test_orchestrator|mock_trainer|mock_rollout|start_rollout_only)
