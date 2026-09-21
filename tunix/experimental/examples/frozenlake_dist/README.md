@@ -53,23 +53,25 @@ transitions.
 
 ## Gemma4 E2B
 
-The Gemma4 launcher uses the same model, chat parser, trainer settings, and
-text-only vLLM overrides as `examples/frozenlake/train_frozenlake.py`. On the
-default 4-chip topology it assigns chips 0-1 to a two-way FSDP trainer and
-chips 2-3 to a two-way TP rollout worker:
+The same launcher also supports the model, chat parser, trainer settings, and
+text-only vLLM overrides used by `examples/frozenlake/train_frozenlake.py`.
+Select Gemma4 with `MODEL_ID`; `MODEL_NAME` is derived from the model ID when
+it is not explicitly set:
 
 ```bash
 cd tunix/experimental/examples/frozenlake_dist
-WEIGHT_SYNC_MODE=raiden ./run_gemma4_e2b.sh
+MODEL_ID=google/gemma-4-E2B-it WEIGHT_SYNC_MODE=raiden ./launcher.sh
 ```
 
-The wrapper selects `google/gemma-4-E2B-it`, fp32 actor parameter storage,
-decoder rematerialization, flash attention with block size 256, the Gemma4
-non-thinking chat template, two-trajectory trainer/logp micro-batches, and the
-reference logp chunk size and rollout limits (`compute_logps_chunk_size=2048`,
-`max_concurrency=512`, `max_num_seqs=32`,
-`max_num_batched_tokens=8192`). All variables remain overridable through the
-environment before invoking the wrapper.
+For Gemma4 E2B, `launcher.sh` automatically uses the 4-chip topology from the
+reference distributed setup: chips 0-1 form a two-way FSDP trainer and chips
+2-3 form a two-way TP rollout worker. It also selects fp32 actor parameter
+storage, decoder rematerialization, flash attention with block size 256, the
+Gemma4 non-thinking chat template, two-trajectory trainer/logp micro-batches,
+and the reference logp chunk size and rollout limits
+(`compute_logps_chunk_size=2048`, `max_concurrency=512`, `max_num_seqs=32`,
+`max_num_batched_tokens=8192`). Every default remains overridable through the
+same environment variables used for Qwen.
 
 One reference-only feature is not modeled separately: the original recipe's
 `sampler_is` threshold is folded into the distributed path's rollout-logprob

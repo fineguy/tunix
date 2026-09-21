@@ -256,23 +256,23 @@ class FrozenLakeDistTest(absltest.TestCase):
     self.assertIn('--sampler_is="$SAMPLER_IS"', launcher)
     self.assertIn('--rollout_mesh_tp="$ROLLOUT_TP"', launcher)
 
-  def test_gemma4_launcher_matches_reference_runtime_limits(self):
-    launcher = (
-        Path(frozenlake.__file__).parent / "run_gemma4_e2b.sh"
-    ).read_text(encoding="utf-8")
-    self.assertIn("MODEL_NAME=${MODEL_NAME:-gemma-4-e2b}", launcher)
-    self.assertIn("MODEL_ID=${MODEL_ID:-google/gemma-4-E2B-it}", launcher)
-    self.assertIn("TRAINER_TPU_CHIPS:-0,1", launcher)
-    self.assertIn("TRAINER_FSDP:-2", launcher)
-    self.assertIn("TRAINER_TP:-1", launcher)
-    self.assertIn("ROLLOUT_TPU_CHIPS:-2,3", launcher)
-    self.assertIn("ROLLOUT_TP:-2", launcher)
-    self.assertIn("TRAIN_MICRO_BATCH_SIZE:-2", launcher)
-    self.assertIn("COMPUTE_LOGPS_MICRO_BATCH_SIZE:-2", launcher)
-    self.assertIn("COMPUTE_LOGPS_CHUNK_SIZE:-2048", launcher)
-    self.assertIn("ROLLOUT_MAX_CONCURRENCY:-512", launcher)
-    self.assertIn("VLLM_MAX_NUM_SEQS:-32", launcher)
-    self.assertIn("VLLM_MAX_NUM_BATCHED_TOKENS:-8192", launcher)
+  def test_unified_launcher_has_gemma4_reference_defaults(self):
+    launcher = (Path(frozenlake.__file__).parent / "launcher.sh").read_text(
+        encoding="utf-8"
+    )
+    self.assertIn("MODEL_NAME=${MODEL_ID##*/}", launcher)
+    self.assertIn("*gemma-4*e2b*|*gemma4*e2b*)", launcher)
+    self.assertIn("DEFAULT_TRAINER_TPU_CHIPS=0,1", launcher)
+    self.assertIn("DEFAULT_TRAINER_FSDP=2", launcher)
+    self.assertIn("DEFAULT_TRAINER_TP=1", launcher)
+    self.assertIn("DEFAULT_ROLLOUT_TPU_CHIPS=2,3", launcher)
+    self.assertIn("DEFAULT_ROLLOUT_TP=2", launcher)
+    self.assertIn("DEFAULT_TRAIN_MICRO_BATCH_SIZE=2", launcher)
+    self.assertIn("DEFAULT_COMPUTE_LOGPS_MICRO_BATCH_SIZE=2", launcher)
+    self.assertIn("DEFAULT_COMPUTE_LOGPS_CHUNK_SIZE=2048", launcher)
+    self.assertIn("DEFAULT_ROLLOUT_MAX_CONCURRENCY=512", launcher)
+    self.assertIn("DEFAULT_VLLM_MAX_NUM_SEQS=32", launcher)
+    self.assertIn("DEFAULT_VLLM_MAX_NUM_BATCHED_TOKENS=8192", launcher)
 
 
 if __name__ == "__main__":
