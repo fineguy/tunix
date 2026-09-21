@@ -907,7 +907,11 @@ def init_print(
       platform = "TPU-Ironwood"
 
   # Gradient accumulation steps
-  grad_accum_steps = max(1, batch_size // mini_batch_size)
+  grad_accum_steps = max(
+      1,
+      batch_size // mini_batch_size,
+      (mini_batch_size * num_generations) // max(1, train_micro_batch_size),
+  )
 
   # 1. Submission Metadata
   mllogger.event(
