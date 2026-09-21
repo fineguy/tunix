@@ -234,6 +234,11 @@ class FrozenLakeDistTest(absltest.TestCase):
         launcher,
     )
     self.assertIn('--sampler_is="$SAMPLER_IS"', launcher)
+    self.assertIn("RUN_ID=", launcher)
+    self.assertIn("--enable_trajectory_store=", launcher)
+    self.assertIn("--trajectory_store_backend=", launcher)
+    self.assertIn("--trajectory_store_dir=", launcher)
+    self.assertIn("--run_id=", launcher)
 
 
 if __name__ == "__main__":
