@@ -137,6 +137,11 @@ export TRAINER_MESH_EXPERT=${TRAINER_MESH_EXPERT:-1}
 # Padded MoE MLP intermediate dimension; must match rollout TP padding for MoE models.
 export TRAINER_PADDED_MOE_MLP_DIM=${TRAINER_PADDED_MOE_MLP_DIM:-}
 export TRAINER_BASE_NUM_KV_HEADS=${TRAINER_BASE_NUM_KV_HEADS:-${BASE_NUM_KV_HEADS:-}}
+# Rollout jobset template. Defaults to the single-host TPU jobset, which is what
+# a 4-chip-per-replica rollout wants. A multihost rollout -- e.g. 397B at 16
+# chips / 4 hosts per replica -- needs the Ray-backed template instead, since
+# vLLM has to be driven across hosts by a Ray cluster rather than one process.
+export ROLLOUT_JOBSET_YAML=${ROLLOUT_JOBSET_YAML:-jobset.tpu.yaml}
 export ROLLOUT_MESH_TP=${ROLLOUT_MESH_TP:-2}
 export ROLLOUT_MESH_FSDP=${ROLLOUT_MESH_FSDP:-1}
 # Optional: enable experimental batched-RPA attention kernel for rollout.
@@ -615,7 +620,7 @@ if cfg:
       worker_id="${ROLLOUT_ID}-${i}"
     fi
     "$PYTHON_BIN" "$YAML_GENERATOR" \
-      "${YAML_DIR}/jobset.tpu.yaml" \
+      "${YAML_DIR}/${ROLLOUT_JOBSET_YAML}" \
       --jobset_name="${replica_id}" \
       --tpu_slice=${ROLLOUT_TPU_SLICE} \
       --worker_container_image="${TUNIX_IMAGE}" \
