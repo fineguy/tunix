@@ -1,5 +1,12 @@
 # Distributed FrozenLake GRPO Recipe
 
+For matched distributed/agentic efficiency experiments on a 4-chip VM, see
+[the RL efficiency benchmark](../rl_efficiency_benchmark/README.md). It keeps
+benchmark-only code outside this recipe, supports both single-turn and
+multi-turn rollout measurement, generates both configurations, records
+sync-to-sync end-to-end, rollout, token, RPC, and pipeline timings, and verifies
+the workload.
+
 This directory ports the Qwen3 and Gemma4 E2B FrozenLake recipes under
 `examples/frozenlake/` to the experimental distributed RL stack. The control
 plane runs on CPU, while the generic distributed trainer and rollout workers

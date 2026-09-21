@@ -267,6 +267,10 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
 
   args = _parse_args(argv)
   _validate_args(args)
+  if os.environ.get("TUNIX_BENCHMARK_DIR"):
+    from tunix.experimental.examples.rl_efficiency_benchmark import runtime
+
+    runtime.install("dist")
   logging.basicConfig(
       level=logging.DEBUG if args.debug else logging.INFO,
       format="%(asctime)s - [FrozenLakeOrchestrator] %(message)s",
@@ -304,6 +308,8 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
       shuffle_seed=args.seed if args.shuffle else None,
       limit=args.num_batches * args.batch_size,
   )
+  if os.environ.get("TUNIX_BENCHMARK_DIR"):
+    runtime.record_dataset(dataset)
   logging.info(
       "Prepared %d FrozenLake configurations; the prompt iterator repeats "
       "them for %d epochs.",
@@ -345,6 +351,9 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
       flush_every_n_steps=args.flush_every_n_steps,
       backend_kwargs={"wandb": {"config": vars(args)}},
   )
+  if os.environ.get("TUNIX_BENCHMARK_DIR"):
+    # Match agentic's benchmark: scalar monitoring without output backends.
+    metrics_options = None
   program = rl_program.StandardRLProgram(
       algo=algo,
       dataset=frozenlake.iter_prompt_items(

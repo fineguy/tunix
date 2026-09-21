@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import os
 from typing import Any
 
 from examples.frozenlake import agent as frozenlake_agent
@@ -24,6 +25,13 @@ from examples.frozenlake import data as frozenlake_data
 from examples.frozenlake import env as frozenlake_env
 import numpy as np
 from tunix.experimental.rl.agentic import registry
+
+if os.environ.get("TUNIX_BENCHMARK_PROCESS") == "rollout-worker":
+  from tunix.experimental.examples.rl_efficiency_benchmark import runtime
+
+  runtime.install(
+      "rollout-worker", os.environ.get("TUNIX_BENCHMARK_WORKER_ID")
+  )
 
 FROZENLAKE_ENV_NAME = "frozenlake_env"
 FROZENLAKE_AGENT_NAME = "frozenlake_agent"

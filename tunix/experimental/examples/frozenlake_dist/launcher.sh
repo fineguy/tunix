@@ -358,6 +358,10 @@ TRAINER_PID=$!
   export TPU_CHIPS_PER_HOST_BOUNDS
   export TPU_HOST_BOUNDS
   export LIBTPU_INIT_ARGS="--deepsea_chips_per_host_bounds=${TPU_CHIPS_PER_HOST_BOUNDS} --deepsea_host_bounds=${TPU_HOST_BOUNDS}"
+  if [[ -n "${TUNIX_BENCHMARK_DIR:-}" ]]; then
+    export TUNIX_BENCHMARK_PROCESS=rollout-worker
+    export TUNIX_BENCHMARK_WORKER_ID=vllm-rollout-0
+  fi
   export PYTHONUNBUFFERED=1
   exec "${cmd[@]}" > "$ROLLOUT_LOG" 2>&1
 ) &
