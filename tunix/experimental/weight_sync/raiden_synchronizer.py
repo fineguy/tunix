@@ -491,7 +491,7 @@ class RaidenSynchronizer(weight_sync.WeightSynchronizer):
       *,
       worker_index: int = 0,
       auto_h2d: bool = False,
-      parallelism: int = 4,
+      parallelism: Optional[int] = None,
       bind_ip: Optional[str] = None,
       **kwargs: Any,
   ):
@@ -504,7 +504,11 @@ class RaidenSynchronizer(weight_sync.WeightSynchronizer):
     self.ip = bind_ip or local_ip()
     self._auto_h2d = auto_h2d
     self._is_proxy = is_proxy
-    self._parallelism = parallelism
+    self._parallelism = (
+        parallelism
+        if parallelism is not None
+        else int(os.getenv("RAIDEN_PARALLELISM", "4"))
+    )
     self._sync: Any = None
     self._ips: List[str] = []
     self._unique_listeners: List[str] = []

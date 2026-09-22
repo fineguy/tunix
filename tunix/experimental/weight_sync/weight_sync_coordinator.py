@@ -551,8 +551,16 @@ class PhaseTimeouts:
   metadata: float = 60.0
   source_prepare: float = 900.0
   pre: float = 180.0
-  transfer: float = 1800.0
-  h2d: float = 1800.0
+  transfer: float = dataclasses.field(
+      default_factory=lambda: float(
+          os.getenv("WEIGHT_SYNC_TIMEOUT_TRANSFER", "1800.0")
+      )
+  )
+  h2d: float = dataclasses.field(
+      default_factory=lambda: float(
+          os.getenv("WEIGHT_SYNC_TIMEOUT_H2D", "1800.0")
+      )
+  )
   post: float = 300.0
   abort: float = 180.0
   status: float = 30.0

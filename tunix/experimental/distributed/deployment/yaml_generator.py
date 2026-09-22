@@ -139,6 +139,11 @@ def main() -> None:
       default="sleep infinity",
       help="Command to run on startup",
   )
+  parser.add_argument(
+      "--enable_pathways_persistence",
+      default=os.environ.get("ENABLE_PATHWAYS_PERSISTENCE", "1"),
+      help="Enable Pathways persistence (1 or 0)",
+  )
 
   args = parser.parse_args()
 
@@ -252,6 +257,7 @@ def main() -> None:
         USER_CONTAINER_IMAGE=args.worker_container_image,
         USER_CONTAINER_PORT=args.worker_container_port,
         STARTUP_COMMAND=args.worker_startup_command,
+        ENABLE_PATHWAYS_PERSISTENCE=args.enable_pathways_persistence,
     )
     print(content)
 

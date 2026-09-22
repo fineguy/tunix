@@ -199,12 +199,17 @@ export ENABLE_PREFIX_CACHING=${ENABLE_PREFIX_CACHING:-false}
 export TRAINER_JOBSET_YAML=${TRAINER_JOBSET_YAML:-jobset.pathways.yaml}
 export TRAINER_TPU_SLICE=${TRAINER_TPU_SLICE:-tpuv5:2x2x2}
 export TRAINER_MESH_FSDP=${TRAINER_MESH_FSDP:-8}
+export ROLLOUT_JOBSET_YAML=${ROLLOUT_JOBSET_YAML:-jobset.tpu.yaml}
 export ROLLOUT_TPU_SLICE=${ROLLOUT_TPU_SLICE:-tpuv5:2x2x1}
 export ROLLOUT_REPLICAS=${ROLLOUT_REPLICAS:-1}
 export KUEUE_QUEUE=${KUEUE_QUEUE:-}
 export K8S_NAMESPACE=${K8S_NAMESPACE:-default}
 
 export TRAINER_EXTRA_ENV=${TRAINER_EXTRA_ENV:-}
+export ORCHESTRATOR_EXTRA_ENV=${ORCHESTRATOR_EXTRA_ENV:-}
+export ROLLOUT_EXTRA_ENV=${ROLLOUT_EXTRA_ENV:-}
+export VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY=${VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY:-RAIDEN_}
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY:-ONEHOT_MOE_PERMUTE_THRESHOLD,LIBTPU_INIT_ARGS,RAY_memory_monitor_refresh_ms}
 export DRY_RUN=${DRY_RUN:-false}
 
 apply_manifest() {
@@ -305,6 +310,7 @@ start_orchestrator() {
       PYTHONUNBUFFERED=1 \
       TUNIX_IS_INTERNAL_ENV=false \
       ${BOOTSTRAP_CMD} \
+      ${ORCHESTRATOR_EXTRA_ENV:+${ORCHESTRATOR_EXTRA_ENV}} \
       python -m tunix.experimental.distributed.runtime.main \
         --discovery_id=${ORCHESTRATOR_ID} \
         --discovery_port=${ORCHESTRATOR_PORT} \
@@ -360,9 +366,9 @@ start_orchestrator() {
         ${IMAGE_REWRITE_PREFIX:+--image_rewrite_prefix=${IMAGE_REWRITE_PREFIX}} \
         ${MAX_SEQ_TOKEN_PER_TPU:+--max_seq_token_per_tpu=${MAX_SEQ_TOKEN_PER_TPU}} \
         ${MAX_SEGMENTS_PER_PACKED_ROW:+--max_segments_per_packed_row=${MAX_SEGMENTS_PER_PACKED_ROW}} \
+        ${RPC_TIMEOUT_S:+--rpc_timeout_s=${RPC_TIMEOUT_S}} \
         ${TRAINER_MESH_FSDP:+--trainer_fsdp=${TRAINER_MESH_FSDP}} \
         $( [[ "${TRAINER_MESH_EXPERT:-1}" -gt 1 ]] && echo "--trainer_expert=${TRAINER_MESH_EXPERT}" ) \
-        ${RPC_TIMEOUT_S:+--rpc_timeout_s=${RPC_TIMEOUT_S}} \
         ${TRAINABLE_PARAMETERS_MASK:+--trainable_parameters_mask='${TRAINABLE_PARAMETERS_MASK}'} \
         ${debug_arg} \
     " \
@@ -420,7 +426,7 @@ start_trainer() {
   fi
   local raiden_env=""
   if [[ "${WEIGHT_SYNC_MODE}" == "raiden" ]]; then
-    if [[ "${TRAINER_JOBSET_YAML}" == "jobset.pathways.yaml" ]]; then
+    if [[ "${TRAINER_JOBSET_YAML}" == jobset.pathways* ]]; then
       raiden_env+=" RAIDEN_USE_FFI=1"
     fi
   fi
@@ -438,6 +444,7 @@ start_trainer() {
     ${USER_CONTAINER_MEMORY_LIMIT:+--user_container_memory_limit="${USER_CONTAINER_MEMORY_LIMIT}"} \
     ${PATHWAYS_WORKER_MEMORY:+--pathways_worker_memory="${PATHWAYS_WORKER_MEMORY}"} \
     --pathways_gcs_scratch_location=${GCS_SCRATCH_LOCATION} \
+    ${ENABLE_PATHWAYS_PERSISTENCE:+--enable_pathways_persistence="${ENABLE_PATHWAYS_PERSISTENCE}"} \
     --worker_container_image="${TUNIX_IMAGE}" \
     --worker_container_port="${TRAINER_PORT}" \
     --worker_startup_command=" \
@@ -625,7 +632,7 @@ if cfg:
       worker_id="${ROLLOUT_ID}-${i}"
     fi
     "$PYTHON_BIN" "$YAML_GENERATOR" \
-      "${YAML_DIR}/${ROLLOUT_JOBSET_YAML}" \
+      "${YAML_DIR}/${ROLLOUT_JOBSET_YAML:-jobset.tpu.yaml}" \
       --jobset_name="${replica_id}" \
       --tpu_slice=${ROLLOUT_TPU_SLICE} \
       --worker_container_image="${TUNIX_IMAGE}" \
@@ -657,7 +664,10 @@ if cfg:
         ${LIBTPU_INIT_ARGS:+LIBTPU_INIT_ARGS=\"${LIBTPU_INIT_ARGS}\"} \
         ${VLLM_ENABLE_V1_MULTIPROCESSING:+VLLM_ENABLE_V1_MULTIPROCESSING=${VLLM_ENABLE_V1_MULTIPROCESSING}} \
         ${VLLM_LOGGING_LEVEL:+VLLM_LOGGING_LEVEL=${VLLM_LOGGING_LEVEL}} \
+        ${VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY:+VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY=\"${VLLM_RAY_EXTRA_ENV_VAR_PREFIXES_TO_COPY}\"} \
+        ${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY:+VLLM_RAY_EXTRA_ENV_VARS_TO_COPY=\"${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY}\"} \
         ${ROLLOUT_ENV_FLAGS} \
+        ${ROLLOUT_EXTRA_ENV:+${ROLLOUT_EXTRA_ENV}} \
         SKIP_JAX_PRECOMPILE=1 VERIFY_WEIGHTS=${VERIFY_WEIGHTS} ${sandbox_env} ${ROLLOUT_USE_BATCHED_RPA:+USE_BATCHED_RPA_KERNEL=1} python -m tunix.experimental.distributed.runtime.main \
           --discovery_addrs=${ORCHESTRATOR_ID}:${ORCHESTRATOR_PORT} \
           --process_executor=tunix.experimental.distributed.runtime.executor.K8sExecutor \
@@ -702,6 +712,7 @@ start_mock_trainer() {
     --worker_container_port="${TRAINER_PORT}" \
     --worker_startup_command=" \
       TUNIX_IS_INTERNAL_ENV=false \
+      ${TRAINER_EXTRA_ENV:+${TRAINER_EXTRA_ENV}} \
       python -m tunix.experimental.distributed.runtime.main \
         --discovery_addrs=${ORCHESTRATOR_ID}:${ORCHESTRATOR_PORT} \
         --process_executor=tunix.experimental.distributed.runtime.executor.K8sExecutor \
@@ -721,6 +732,7 @@ start_mock_rollout() {
     --worker_container_port="${ROLLOUT_PORT}" \
     --worker_startup_command=" \
       TUNIX_IS_INTERNAL_ENV=false \
+      ${ROLLOUT_EXTRA_ENV:+${ROLLOUT_EXTRA_ENV}} \
       python -m tunix.experimental.distributed.runtime.main \
         --discovery_addrs=${ORCHESTRATOR_ID}:${ORCHESTRATOR_PORT} \
         --process_executor=tunix.experimental.distributed.runtime.executor.K8sExecutor \

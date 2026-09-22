@@ -40,6 +40,7 @@ ${QUEUE_LABEL}spec:
           spec:
             dnsPolicy: ClusterFirstWithHostNet
             hostNetwork: true
+            serviceAccountName: ${SERVICE_ACCOUNT}
             restartPolicy: Never${PRIORITY_CLASS_LINE}
             terminationGracePeriodSeconds: 10
             nodeSelector:
@@ -88,6 +89,8 @@ ${QUEUE_LABEL}spec:
               - --instance_count=${REPLICAS}
               - --instance_type=${PW_INSTANCE_TYPE}:${TPU_TOPOLOGY}
               env:
+              - name: ENABLE_PATHWAYS_PERSISTENCE
+                value: "${ENABLE_PATHWAYS_PERSISTENCE}"
               - name: REPLICATED_JOB_NAME
                 valueFrom:
                   fieldRef:
@@ -121,6 +124,8 @@ ${QUEUE_LABEL}spec:
               - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
               - --temporary_flags_for_debugging=temporary_flag_for_debugging_test_only_hold_death_ref=false
               env:
+              - name: ENABLE_PATHWAYS_PERSISTENCE
+                value: "${ENABLE_PATHWAYS_PERSISTENCE}"
               - name: PATHWAYS_HEAD
                 valueFrom:
                   fieldRef:
@@ -172,6 +177,8 @@ ${QUEUE_LABEL}spec:
                   echo "EXIT_CODE=$$EXIT_CODE"
                   exit $$EXIT_CODE
               env:
+              - name: ENABLE_PATHWAYS_PERSISTENCE
+                value: "${ENABLE_PATHWAYS_PERSISTENCE}"
               # Injects the JobSet Name
               - name: JOBSET_NAME
                 valueFrom:
@@ -220,6 +227,7 @@ ${QUEUE_LABEL}spec:
           spec:
             dnsPolicy: ClusterFirstWithHostNet
             hostNetwork: true
+            serviceAccountName: ${SERVICE_ACCOUNT}
             restartPolicy: OnFailure${PRIORITY_CLASS_LINE}
             terminationGracePeriodSeconds: 10
             nodeSelector:
@@ -258,6 +266,8 @@ ${QUEUE_LABEL}spec:
               - --resource_manager_address=$$(PATHWAYS_HEAD):29001
               - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
               env:
+              - name: ENABLE_PATHWAYS_PERSISTENCE
+                value: "${ENABLE_PATHWAYS_PERSISTENCE}"
               - name: TPU_MIN_LOG_LEVEL
                 value: "0"
               - name: TF_CPP_MIN_LOG_LEVEL
