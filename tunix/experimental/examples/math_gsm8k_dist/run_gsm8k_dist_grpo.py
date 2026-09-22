@@ -591,10 +591,15 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
       trajectory_log_dir=args.trajectory_log_dir,
       max_staleness=args.max_staleness,
       sync_weights=(args.weight_sync_mode != "none"),
-      on_step_begin=lambda step: logging.info(
-          ">>> Step %d starting | Policy Version: %d",
-          step,
-          step,
+      on_step_begin=lambda step: (
+          mllog_utils.train_start(args, step=0)
+          if args.rcp_logging and step == 0
+          else None,
+          logging.info(
+              ">>> Step %d starting | Policy Version: %d",
+              step,
+              step,
+          ),
       ),
       on_step_end=lambda step, result: (
           logging.info(
@@ -627,8 +632,6 @@ def main(argv: list[str], context: ProcessContext | None = None) -> None:
   try:
     logging.info("Bringing up remote workers through ClusterOrchestrator...")
     cluster.bring_up_workers(dummy_data=None)
-    if args.rcp_logging:
-      mllog_utils.train_start(args, step=0)
     logging.info(
         "Cluster workers ready: %s. Starting StandardRLProgram execution...",
         [w.worker_id for w in cluster.worker_infos()],

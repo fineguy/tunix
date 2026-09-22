@@ -100,6 +100,7 @@ RUN if [ "$INSTALL_RAIDEN" = "true" ]; then \
 
 # Force install numpy, jax, and flax versions to avoid version conflicts and API breakage.
 RUN uv pip install numpy==2.3.5 'jax==0.11.0' 'flax==0.12.7'
+RUN uv pip install "git+https://github.com/mlcommons/logging.git@5.0.0-rc3"
 
 # Copy the rest of the project files
 COPY . .
