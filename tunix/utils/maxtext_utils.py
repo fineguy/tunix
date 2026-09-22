@@ -424,6 +424,13 @@ def build_maxtext_config(
   # The persistence handler rejects the OCDBT/zarr3 layout MaxText writes by
   # default (see maxtext/common/checkpoint_context.py), so both must be off
   if os.environ.get("ENABLE_PATHWAYS_PERSISTENCE", "") == "1":
+    if save_interval_steps > 0 and not output_dir.startswith("gs://"):
+      raise ValueError(
+          "ENABLE_PATHWAYS_PERSISTENCE=1 with save_interval_steps > 0 "
+          "requires a gs:// base_output_directory so all pathways-worker pods "
+          f"write to shared GCS storage; got {output_dir!r}. "
+          "Set MAXTEXT_OUTPUT_DIR=gs://..."
+      )
     logging.info(
         "ENABLE_PATHWAYS_PERSISTENCE=1; disabling OCDBT/zarr3 so the Pathways "
         "persistence handler can save directly from the TPU workers."
@@ -432,6 +439,27 @@ def build_maxtext_config(
         "checkpoint_storage_use_ocdbt=false",
         "checkpoint_storage_use_zarr3=false",
     ])
+
+  _bool_map = {
+      "0": "false",
+      "false": "false",
+      "no": "false",
+      "1": "true",
+      "true": "true",
+      "yes": "true",
+  }
+  for _env_key, _cfg_key in (
+      ("CHECKPOINT_SAVE_OPTIMIZER_STATE", "save_optimizer_state"),
+      ("CHECKPOINT_ASYNC", "async_checkpointing"),
+  ):
+    _raw = os.environ.get(_env_key, "").strip().lower()
+    if _raw in _bool_map:
+      argv.append(f"{_cfg_key}={_bool_map[_raw]}")
+    elif _raw:
+      raise ValueError(
+          f"{_env_key} must be a boolean string "
+          f"('0'/'false'/'no' or '1'/'true'/'yes'); got {_raw!r}."
+      )
 
   _d2h_gb = os.environ.get("CKPT_D2H_CONCURRENT_GB", "").strip()
   if _d2h_gb:

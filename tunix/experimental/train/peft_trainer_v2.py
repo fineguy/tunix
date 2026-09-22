@@ -18,6 +18,7 @@ from collections.abc import Iterable, Iterator, Mapping
 import contextlib
 import dataclasses
 import functools
+import gc
 import os
 import time
 from typing import Any, Callable, Concatenate, Dict, List, ParamSpec, Tuple
@@ -1366,6 +1367,8 @@ class PeftTrainer(abstract_trainer.AbstractTrainer):
     worker = self._weight_sync_worker
     if worker is not None and worker.bound:
       logging.vlog(1, "raiden metrics: %s", worker.metrics())
+      if hasattr(worker, "release_buffers") and worker.release_buffers():
+        gc.collect()
     return True
 
   @override

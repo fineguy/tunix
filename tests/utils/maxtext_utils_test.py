@@ -535,6 +535,69 @@ class MaxTextUtilsTest(absltest.TestCase):
       argv = self._build_config_argv()
     self.assertIn("attention=flash", argv)
 
+  def test_pathways_persistence_requires_gs_output_dir_when_saving_enabled(self):
+    with mock.patch.dict("os.environ", {"ENABLE_PATHWAYS_PERSISTENCE": "1"}):
+      with self.assertRaisesRegex(
+          ValueError, "requires a gs:// base_output_directory"
+      ):
+        self._build_config_argv(
+            base_output_directory="artifacts/math_gsm8k_dist/maxtext",
+            checkpointing_options=mock.MagicMock(
+                save_interval_steps=1, max_to_keep=2
+            ),
+        )
+
+  def test_pathways_persistence_with_gs_output_dir_sets_ocdbt_and_zarr3_false(
+      self,
+  ):
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "ENABLE_PATHWAYS_PERSISTENCE": "1",
+            "CHECKPOINT_SAVE_OPTIMIZER_STATE": "false",
+        },
+    ):
+      argv = self._build_config_argv(
+          base_output_directory="gs://yixuannwang-maxtext-dataset/trellis/0921",
+          checkpointing_options=mock.MagicMock(
+              save_interval_steps=1, max_to_keep=2
+          ),
+      )
+    self.assertIn(
+        "base_output_directory=gs://yixuannwang-maxtext-dataset/trellis/0921",
+        argv,
+    )
+    self.assertIn("checkpoint_storage_use_ocdbt=false", argv)
+    self.assertIn("checkpoint_storage_use_zarr3=false", argv)
+    self.assertIn("save_optimizer_state=false", argv)
+
+  def test_pathways_persistence_allows_local_output_dir_when_save_interval_zero(
+      self,
+  ):
+    with mock.patch.dict(
+        "os.environ",
+        {"ENABLE_PATHWAYS_PERSISTENCE": "1", "CHECKPOINT_ASYNC": "false"},
+    ):
+      argv = self._build_config_argv(
+          base_output_directory="artifacts/math_gsm8k_dist/maxtext",
+          load_parameters_path="gs://bucket/ckpt",
+          checkpointing_options=None,
+      )
+    self.assertIn("checkpoint_storage_use_ocdbt=false", argv)
+    self.assertIn("checkpoint_storage_use_zarr3=false", argv)
+    self.assertIn("async_checkpointing=false", argv)
+
+  def test_checkpoint_boolean_env_invalid_raises(self):
+    with mock.patch.dict(
+        "os.environ", {"CHECKPOINT_SAVE_OPTIMIZER_STATE": "fasle"}
+    ):
+      with self.assertRaisesRegex(ValueError, "must be a boolean string"):
+        self._build_config_argv()
+    with mock.patch.dict("os.environ", {"CHECKPOINT_ASYNC": "invalid"}):
+      with self.assertRaisesRegex(ValueError, "must be a boolean string"):
+        self._build_config_argv()
+
 
 if __name__ == "__main__":
   absltest.main()
+

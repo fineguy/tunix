@@ -81,6 +81,8 @@ export CHAT_PARSER=${CHAT_PARSER:-raw}
 export CHECKPOINT_SAVE_INTERVAL_STEPS=${CHECKPOINT_SAVE_INTERVAL_STEPS:-1}
 export CHECKPOINT_MAX_TO_KEEP=${CHECKPOINT_MAX_TO_KEEP:-10}
 export CHECKPOINT_ROOT_DIRECTORY=${CHECKPOINT_ROOT_DIRECTORY:-checkpoints}
+export CHECKPOINT_SAVE_OPTIMIZER_STATE=${CHECKPOINT_SAVE_OPTIMIZER_STATE:-true}
+export CHECKPOINT_ASYNC=${CHECKPOINT_ASYNC:-}
 export ENABLE_PATHWAYS_PERSISTENCE=${ENABLE_PATHWAYS_PERSISTENCE:-0}
 export CKPT_D2H_CONCURRENT_GB=${CKPT_D2H_CONCURRENT_GB:-8}
 
@@ -88,6 +90,12 @@ export CKPT_D2H_CONCURRENT_GB=${CKPT_D2H_CONCURRENT_GB:-8}
 export MAXTEXT_MODEL_NAME=${MAXTEXT_MODEL_NAME:-qwen3-1.7b}
 export MAXTEXT_CKPT=${MAXTEXT_CKPT:-}
 export MAXTEXT_OUTPUT_DIR=${MAXTEXT_OUTPUT_DIR:-artifacts/math_gsm8k_dist/maxtext}
+if [[ "${TRAINER_BACKEND}" == "maxtext" && "${ENABLE_PATHWAYS_PERSISTENCE}" == "1" && "${CHECKPOINT_SAVE_INTERVAL_STEPS}" -gt 0 ]]; then
+  if [[ "${MAXTEXT_OUTPUT_DIR}" != gs://* ]]; then
+    echo "ERROR: ENABLE_PATHWAYS_PERSISTENCE=1 with CHECKPOINT_SAVE_INTERVAL_STEPS=${CHECKPOINT_SAVE_INTERVAL_STEPS} requires MAXTEXT_OUTPUT_DIR to be a gs:// URI (got '${MAXTEXT_OUTPUT_DIR}')." >&2
+    exit 1
+  fi
+fi
 # Padded MoE MLP intermediate dimension; must match rollout TP padding for MoE models.
 export TRAINER_PADDED_MOE_MLP_DIM=${TRAINER_PADDED_MOE_MLP_DIM:-}
 # Optional: enable experimental batched-RPA attention kernel for rollout.
@@ -145,11 +153,25 @@ export USER_CONTAINER_MEMORY=${USER_CONTAINER_MEMORY:-48G}
 export USER_CONTAINER_MEMORY_LIMIT=${USER_CONTAINER_MEMORY_LIMIT:-70G}
 export PATHWAYS_WORKER_MEMORY=${PATHWAYS_WORKER_MEMORY:-100G}
 export TRAINER_EXTRA_ENV=${TRAINER_EXTRA_ENV:-}
+# Extra `KEY=VALUE` pairs prefixed to the rollout worker command, mirroring
+# TRAINER_EXTRA_ENV. Space separated.
+export ROLLOUT_EXTRA_ENV=${ROLLOUT_EXTRA_ENV:-}
+# Extra env for the orchestrator container, space separated. The H2D weight-sync
+# timeout lives here: the orchestrator drives the transfer, and its default
+# (300-600 s) is too short for a 739 GiB 397B model.
+export ORCHESTRATOR_EXTRA_ENV=${ORCHESTRATOR_EXTRA_ENV:-}
 
 export ROLLOUT_JOBSET_YAML=${ROLLOUT_JOBSET_YAML:-leaderworkerset.mcjax.ray.yaml}
 export ROLLOUT_TPU_SLICE=${ROLLOUT_TPU_SLICE:-tpuv5e:4x4}
 export ROLLOUT_MESH_FSDP=${ROLLOUT_MESH_FSDP:-1}
 export ROLLOUT_MESH_TP=${ROLLOUT_MESH_TP:-16}
+# Expert parallelism for the rollout. Required, not optional, for fully-MoE
+# models whose per-expert intermediate dim cannot absorb the tensor-parallel
+# degree -- see --mesh_expert in run_rollout_node.py. ROLLOUT_MESH_TP *
+# ROLLOUT_MESH_EXPERT must divide the model's head counts, because tpu-inference
+# derives the attention/GDN head divisor from the product of the
+# ('model', 'expert', 'dcp') axes.
+export ROLLOUT_MESH_EXPERT=${ROLLOUT_MESH_EXPERT:-1}
 
 # Kubernetes Cluster & Scheduling Options
 export K8S_NAMESPACE=${K8S_NAMESPACE:-${NAMESPACE:-default}}
@@ -207,6 +229,7 @@ start_orchestrator() {
         --mini_batch_size=${MINI_BATCH_SIZE} \
         --num_generations=${NUM_GENERATIONS} \
         --max_steps=${MAX_STEPS} \
+        ${RPC_TIMEOUT_S:+--rpc_timeout_s=${RPC_TIMEOUT_S}} \
         --max_prompt_length=${MAX_PROMPT_LENGTH} \
         --max_response_length=${MAX_RESPONSE_LENGTH} \
         --train_micro_batch_size=${TRAIN_MICRO_BATCH_SIZE} \
@@ -222,6 +245,7 @@ start_orchestrator() {
         ${MAX_SEQ_TOKEN_PER_TPU:+--max_seq_token_per_tpu=${MAX_SEQ_TOKEN_PER_TPU}} \
         ${MAX_SEGMENTS_PER_PACKED_ROW:+--max_segments_per_packed_row=${MAX_SEGMENTS_PER_PACKED_ROW}} \
         ${TRAINER_MESH_FSDP:+--trainer_fsdp=${TRAINER_MESH_FSDP}} \
+        ${TRAINER_MESH_EXPERT:+--trainer_expert=${TRAINER_MESH_EXPERT}} \
         ${debug_flag} \
     " \
     | apply_manifest
@@ -277,6 +301,7 @@ start_trainer() {
       --mesh_tp=${TRAINER_MESH_TP} \
       --mesh_expert=${TRAINER_MESH_EXPERT} \
       ${ROLLOUT_MESH_TP:+--rollout_mesh_tp=${ROLLOUT_MESH_TP}} \
+      ${ROLLOUT_MESH_EXPERT:+--rollout_mesh_expert=${ROLLOUT_MESH_EXPERT}} \
       --use_weight_converter=${USE_WEIGHT_CONVERTER} \
       ${MAX_SEQ_TOKEN_PER_TPU:+--max_seq_token_per_tpu=${MAX_SEQ_TOKEN_PER_TPU}} \
     "
@@ -284,7 +309,11 @@ start_trainer() {
 
   local raiden_env=""
   if [[ "${WEIGHT_SYNC_MODE}" == "raiden" ]]; then
-    if [[ "${TRAINER_JOBSET_YAML}" == "jobset.pathways.yaml" ]]; then
+    # Any Pathways trainer template, not just the default one: model-specific
+    # variants such as jobset.pathways.qwen3.5-397b.yaml are equally on
+    # Pathways, and an exact-name test silently drops them to the TCP
+    # transport.
+    if [[ "${TRAINER_JOBSET_YAML}" == jobset.pathways*.yaml ]]; then
       raiden_env+=" RAIDEN_USE_FFI=1"
     fi
   fi
@@ -313,7 +342,7 @@ start_trainer() {
     --worker_container_image="${TUNIX_IMAGE}" \
     --worker_container_port="${TRAINER_PORT}" \
     --worker_startup_command=" \
-      ${HF_TOKEN:+HF_TOKEN=\"${HF_TOKEN}\"} VERIFY_WEIGHTS=${VERIFY_WEIGHTS} ENABLE_PATHWAYS_PERSISTENCE=${ENABLE_PATHWAYS_PERSISTENCE}${CKPT_D2H_CONCURRENT_GB:+ CKPT_D2H_CONCURRENT_GB=${CKPT_D2H_CONCURRENT_GB}}${raiden_env}${TRAINER_EXTRA_ENV:+ ${TRAINER_EXTRA_ENV}} python -m tunix.experimental.distributed.runtime.main \
+      ${HF_TOKEN:+HF_TOKEN=\"${HF_TOKEN}\"} VERIFY_WEIGHTS=${VERIFY_WEIGHTS} ENABLE_PATHWAYS_PERSISTENCE=${ENABLE_PATHWAYS_PERSISTENCE} CHECKPOINT_SAVE_OPTIMIZER_STATE=${CHECKPOINT_SAVE_OPTIMIZER_STATE}${CHECKPOINT_ASYNC:+ CHECKPOINT_ASYNC=${CHECKPOINT_ASYNC}}${CKPT_D2H_CONCURRENT_GB:+ CKPT_D2H_CONCURRENT_GB=${CKPT_D2H_CONCURRENT_GB}}${raiden_env}${TRAINER_EXTRA_ENV:+ ${TRAINER_EXTRA_ENV}} python -m tunix.experimental.distributed.runtime.main \
         --discovery_addrs=${ORCHESTRATOR_ID}:${ORCHESTRATOR_PORT} \
         --process_executor=tunix.experimental.distributed.runtime.executor.K8sExecutor \
         --process_main=tunix.experimental.examples.common.run_trainer_node.main \
@@ -435,6 +464,7 @@ start_rollout_instance() {
         --port=${ROLLOUT_PORT} \
         --mesh_fsdp=${ROLLOUT_MESH_FSDP} \
         --mesh_tp=${ROLLOUT_MESH_TP} \
+        --mesh_expert=${ROLLOUT_MESH_EXPERT} \
         --model_name=${MODEL_NAME} \
         --model_id=${MODEL_ID} \
         --model_dir=${MODEL_DIR} \
