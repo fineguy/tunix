@@ -36,6 +36,7 @@ import asyncio
 import dataclasses
 import logging
 import math
+import os
 import threading
 from typing import Any, Optional, Sequence
 
@@ -44,6 +45,66 @@ from tunix.experimental.weight_sync import weight_sync
 from tpu_sync.rpc import controller_service_pb2
 from tpu_sync.rpc import raiden_controller
 from tpu_sync.rpc import raiden_service_pb2
+
+
+# ==============================================================================
+# MONKEY PATCH: Raiden WorkerRpcClient.start_transfer (b/562648469 / b/mlperf-397b)
+# ------------------------------------------------------------------------------
+# In upstream tpu_sync (//third_party/tpu_raiden/tpu_sync/rpc/raiden_controller.py),
+# WorkerRpcClient.start_transfer iterates through all worker endpoints and calls
+# _encode_start_transfer() sequentially for each address.
+#
+# For sender endpoints (e.g. 64 trainer control-plane endpoints on a 128-chip
+# slice), the StartTransferRequest payload contains the complete 128-shard
+# schedule (spanning 948 variables and ~477M block entries) and does NOT depend
+# on the endpoint address. Calling _encode_start_transfer 64 times in a loop
+# rebuilds millions of Python protobuf objects from scratch (~3.5 GB each),
+# causing the orchestrator to consume 220+ GiB of RAM and trigger a Kubelet
+# OOM eviction at address 58/64.
+#
+# This monkey patch serializes the sender payload ONCE and reuses the immutable
+# bytes object for all sender coroutines, dropping memory usage from ~230 GB to
+# ~3.5 GB and serialization time from ~6 minutes to ~5 seconds.
+# ==============================================================================
+def _apply_raiden_sender_payload_reuse_patch() -> None:
+  """Patches WorkerRpcClient to serialize sender payloads once across all endpoints."""
+  orig_start_transfer = raiden_controller.WorkerRpcClient.start_transfer
+
+  async def patched_start_transfer(
+      self: raiden_controller.WorkerRpcClient,
+      target_id: Any,
+      transfer_plan: Any,
+      address: Optional[str] = None,
+  ) -> None:
+    if address:
+      addrs = [a.strip() for a in address.split(",") if a.strip()]
+    else:
+      addrs = await self._resolve_endpoints(target_id)
+
+    is_sender = (
+        target_id in transfer_plan.src_units and transfer_plan.is_sender
+    )
+    if is_sender:
+      logging.info(
+          "[MONKEY_PATCH] Target %s is sender: encoding payload once for %d"
+          " endpoint(s) to avoid OOM memory bloat.",
+          target_id,
+          len(addrs),
+      )
+      payload = self._encode_start_transfer(target_id, transfer_plan)
+      if not payload:
+        return
+      coros = [self._send_and_verify(addr, payload) for addr in addrs]
+      if coros:
+        await asyncio.gather(*coros)
+    else:
+      # Receivers require per-endpoint address specialization for host-level filtering.
+      await orig_start_transfer(self, target_id, transfer_plan, address=address)
+
+  raiden_controller.WorkerRpcClient.start_transfer = patched_start_transfer
+
+
+_apply_raiden_sender_payload_reuse_patch()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -77,7 +138,7 @@ class RaidenTransferOptions:
 
 
 def make_host_staged_transfer_options(
-    parallelism: int = 16,
+    parallelism: Optional[int] = None,
     group_size: int = 128,
     max_layers: int = 2048,
 ) -> RaidenTransferOptions:
@@ -89,7 +150,8 @@ def make_host_staged_transfer_options(
   data. An explicit all-False map keeps every tensor on the logical path.
 
   Args:
-    parallelism: Number of concurrent transfer streams.
+    parallelism: Number of concurrent transfer streams. Defaults to
+      RAIDEN_PARALLELISM env var or 16.
     group_size: Number of tensors the controller moves per group.
     max_layers: Upper bound for the skip_tiling map. The receiver drops indices
       past its own layer count, so a generous value is safe.
@@ -98,6 +160,8 @@ def make_host_staged_transfer_options(
     Options matching the validated e2e run and the pathways benchmark
     client.
   """
+  if parallelism is None:
+    parallelism = int(os.getenv("RAIDEN_PARALLELISM", "16"))
   return RaidenTransferOptions(
       parallelism=parallelism,
       group_size=group_size,
